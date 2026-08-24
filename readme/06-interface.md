@@ -142,7 +142,7 @@ arquivo porque vários componentes usam `display: grid/flex` — sem isso o atri
 | Nova conversa | `panels/new-conversation.js` | tela inicial; barra de modelo/pasta/modo + `chat`; inicia a conversa (`api.chat.start`) e depois continua |
 | Sessões | `panels/sessions.js` | auto-refresh de 5s com `destroy()` limpando o timer; SIGTERM → oferta de SIGKILL no toast |
 | Conversas | `panels/conversations.js` | compõe `data-table` + `chat` + `context-meter` + `inline-edit` (renomear) + `color-picker`; abre em janelas flutuantes (várias, não-modais) com modo/cor salvos por conversa; deletar com "Desfazer" |
-| Lixeira | `panels/trash.js` | filtro local (a lista é pequena) e restauração |
+| Lixeira | `panels/trash.js` | filtro local (a lista é pequena), restauração e expurgo por idade ([`duration-field`](11-componentes.md#duration-fieldjs) + retenção na config global) |
 | Serviços | `panels/services.js` | desenha `/api/_services`: documentação que não desatualiza |
 
 ## Leitor e chat de conversas

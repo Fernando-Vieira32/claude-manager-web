@@ -2,7 +2,7 @@
 
 Painel local para gerenciar o Claude Code: **sessões abertas** (listar e encerrar),
 **conversas salvas** (listar, filtrar, ler em janelas e **continuar a conversa pelo
-navegador**) e **lixeira** (restaurar).
+navegador**) e **lixeira** (restaurar ou apagar de vez o que passou da retenção).
 Node puro + ES modules — sem dependências, sem build.
 
 ```bash
@@ -51,6 +51,8 @@ uma linha em `panels/index.js`. Nada no core muda.
 - escuta só em `127.0.0.1`, sem autenticação — não exponha na rede;
 - só encerra PIDs reconhecidos como sessões do Claude, só com `SIGTERM`/`SIGINT`/`SIGKILL`;
 - deletar conversa **move** para `~/.claude/.trash-conversas` (nunca apaga);
+- a lixeira **não expira sozinha**: só o botão "Excluir antigas" do painel Lixeira apaga
+  de vez, e só o que passou da retenção configurada (padrão 30 dias) — sem Desfazer;
 - o chat usa `claude --resume` e grava no mesmo transcript; ferramentas completas só
   com `CHAT_ALLOW_FULL_TOOLS=1`;
 - a coluna "conversa provável" de uma sessão é palpite (o `.jsonl` mais recente do projeto).

@@ -1,7 +1,10 @@
-// Preferências por conversa (chave/valor), gravadas em arquivo — sobrevivem a
-// fechar/reabrir a janela. Uma conversa = um arquivo, ligado pelo id da conversa
-// ('<pastaDoProjeto>:<sessionId>'), que é único. Só chave/valor simples; este
-// serviço NÃO interpreta o significado das chaves (isso é da interface).
+// Preferências chave/valor gravadas em arquivo, em dois escopos com a MESMA regra:
+//   • por conversa — um arquivo por conversa em data/conversas/, ligado pelo id
+//     ('<pastaDoProjeto>:<sessionId>'), que é único;
+//   • global — um único data/settings.json, para preferência do app inteiro
+//     (ex.: a retenção da lixeira).
+// Só chave/valor simples; este serviço NÃO interpreta o significado das chaves
+// (isso é da interface) — por isso serve para qualquer preferência futura.
 
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -36,12 +39,8 @@ export async function getSettings(id) {
   return { id, settings: await read(fileFor(id)) };
 }
 
-/**
- * Mescla `patch` na config existente e grava (semântica PATCH: manda só o que mudou).
- * Valores só podem ser texto/número/booleano; chaves curtas e alfanuméricas.
- * Uma chave com valor `''` ou `null` é REMOVIDA — é assim que se "volta ao padrão".
- */
-export async function saveSettings(id, patch) {
+/** Recusa o que não é par chave/valor simples, antes de encostar no disco. */
+function validate(patch) {
   if (!patch || typeof patch !== 'object' || Array.isArray(patch)) {
     throw badRequest('configuração deve ser um objeto chave/valor');
   }
@@ -51,8 +50,15 @@ export async function saveSettings(id, patch) {
       throw badRequest(`valor inválido para "${k}" (só texto, número ou booleano)`);
     }
   }
+}
 
-  const file = fileFor(id);
+/**
+ * Mescla `patch` no arquivo e grava (semântica PATCH: manda só o que mudou).
+ * Uma chave com valor `''` ou `null` é REMOVIDA — é assim que se "volta ao padrão".
+ * Vale para os dois escopos: só muda o arquivo de destino.
+ */
+async function merge(file, patch) {
+  validate(patch);
   const merged = { ...(await read(file)), ...patch };
   for (const [k, v] of Object.entries(patch)) {
     if (v === null || v === '') delete merged[k];
@@ -60,9 +66,24 @@ export async function saveSettings(id, patch) {
 
   const body = JSON.stringify(merged, null, 2);
   if (Buffer.byteLength(body) > MAX_BYTES) throw badRequest('configuração grande demais');
-  await fs.mkdir(config.settingsDir, { recursive: true });
+  await fs.mkdir(path.dirname(file), { recursive: true });
   await fs.writeFile(file, body, 'utf8');
-  return { id, settings: merged };
+  return merged;
+}
+
+/** Grava a config de uma conversa. */
+export async function saveSettings(id, patch) {
+  return { id, settings: await merge(fileFor(id), patch) };
+}
+
+/** Config global do app (objeto vazio se nunca foi salva). */
+export async function getGlobalSettings() {
+  return { settings: await read(config.globalSettingsFile) };
+}
+
+/** Grava a config global — mesma semântica PATCH da config por conversa. */
+export async function saveGlobalSettings(patch) {
+  return { settings: await merge(config.globalSettingsFile, patch) };
 }
 
 /**

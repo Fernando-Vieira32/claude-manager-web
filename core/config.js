@@ -16,6 +16,8 @@ export const config = {
   trashDir: path.join(claudeDir, '.trash-conversas'),
   // preferências por conversa (modo, cor…) — ficam DENTRO do projeto e não versionam
   settingsDir: path.join(rootDir, 'data', 'conversas'),
+  // preferências do app inteiro (retenção da lixeira…) — mesmo par chave/valor, um arquivo só
+  globalSettingsFile: path.join(rootDir, 'data', 'settings.json'),
   publicDir: path.join(rootDir, 'public'),
   servicesDir: path.join(rootDir, 'services'),
   // corpo de requisição: grande o bastante para imagens coladas (base64) no chat
