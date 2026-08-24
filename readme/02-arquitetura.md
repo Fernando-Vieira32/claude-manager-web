@@ -34,6 +34,9 @@ services/
 data/
   settings.json          config global do app (1 arquivo); criado sozinho, fora do git
   conversas/             1 arquivo JSON por conversa (config); criado sozinho, fora do git
+test/
+  *.test.js              suíte do `node --test` (npm test) — sem dependências
+  helpers/sandbox.js     pastas temporárias + factories; isola os testes do seu disco
 public/
   index.html             casca: sidebar, topbar, drawer, modal, toasts
                          (as janelas de conversa nascem soltas no <body>)

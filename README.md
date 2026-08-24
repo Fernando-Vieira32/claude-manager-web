@@ -8,6 +8,7 @@ Node puro + ES modules — sem dependências, sem build.
 ```bash
 ./start.sh          # sobe o servidor e abre http://127.0.0.1:7788
 npm run dev         # servidor com --watch
+npm test            # suíte de testes (runner embutido do Node, sem instalar nada)
 ```
 
 ## Documentação
@@ -28,6 +29,8 @@ para nenhum ficar gigante:
 | 09 | [Problemas](readme/09-problemas.md) | erros comuns |
 | 10 | [Chat](readme/10-chat.md) | continuar a conversa pelo navegador |
 | 11 | [Componentes](readme/11-componentes.md) | peças reutilizáveis da interface |
+| 12 | [Máquina nova](readme/12-rodar-em-maquina-nova.md) | runbook de setup em outro computador |
+| 13 | [Testes](readme/13-testes.md) | `npm test`, o sandbox que isola seus dados, RSpec → `node:test` |
 
 ## Estrutura em 10 linhas
 
@@ -39,6 +42,7 @@ public/        index.html, css/tokens.css, css/app.css
 public/js/core       api.js (único fetch), ui.js (casca), app.js (boot)
 public/js/components peças reutilizáveis: feed, bubble, composer, chat, data-table
 public/js/panels     um arquivo por aba + index.js (manifesto); só compõe
+test/          suíte do `node --test` + helpers/sandbox.js (isola os dados)
 readme/        esta documentação
 ```
 

@@ -125,3 +125,17 @@ Use os componentes de `ui.js` e as classes do CSS em vez de inventar:
 `states.loading()`, `states.empty()`, `states.error(err, retry)`, `toast()`,
 `confirmAction()`, `drawer.open()`; classes `card`, `card row`, `cards`, `chip`,
 `meta`, `code`, `btn small`, `grid`. Detalhes em [06 · Interface](06-interface.md).
+
+## Como se verifica um painel
+
+Painel **não tem teste automatizado** aqui: testar DOM exigiria jsdom ou Playwright
+como dependência, e o projeto não tem nenhuma ([13 · Testes](13-testes.md) explica o
+corte). A verificação é no navegador, e é sua responsabilidade fazê-la:
+
+- abra a aba e exercite os dois estados chatos: **lista vazia** e **erro** (derrube o
+  servidor e clique em atualizar);
+- troque de aba e volte — se o `destroy()` não limpar timer/listener, aparece aqui;
+- teste nos dois temas e com o filtro de busca preenchido.
+
+Se a lógica for interessante o bastante para merecer teste, ela provavelmente não é do
+painel: mova para o `repo.js` do serviço (que **é** testável) ou para um componente.

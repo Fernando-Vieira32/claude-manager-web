@@ -5,6 +5,9 @@ import { fileURLToPath } from 'node:url';
 const home = os.homedir();
 const claudeDir = process.env.CLAUDE_CONFIG_DIR || path.join(home, '.claude');
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+// Onde ficam as preferências gravadas. Redirecionável pelo mesmo motivo que
+// CLAUDE_CONFIG_DIR: o teste aponta para uma pasta temporária e não encosta na sua.
+const dataDir = process.env.DATA_DIR || path.join(rootDir, 'data');
 
 export const config = {
   host: process.env.HOST || '127.0.0.1',
@@ -14,10 +17,11 @@ export const config = {
   claudeDir,
   projectsDir: path.join(claudeDir, 'projects'),
   trashDir: path.join(claudeDir, '.trash-conversas'),
+  dataDir,
   // preferências por conversa (modo, cor…) — ficam DENTRO do projeto e não versionam
-  settingsDir: path.join(rootDir, 'data', 'conversas'),
+  settingsDir: path.join(dataDir, 'conversas'),
   // preferências do app inteiro (retenção da lixeira…) — mesmo par chave/valor, um arquivo só
-  globalSettingsFile: path.join(rootDir, 'data', 'settings.json'),
+  globalSettingsFile: path.join(dataDir, 'settings.json'),
   publicDir: path.join(rootDir, 'public'),
   servicesDir: path.join(rootDir, 'services'),
   // corpo de requisição: grande o bastante para imagens coladas (base64) no chat
