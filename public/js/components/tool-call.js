@@ -25,6 +25,9 @@ const VAZIO = '(vazio)';
  */
 export function createToolCall({ name, summary = '', input = '', inputTruncated = false, open = false, onToggle } = {}) {
   const caret = el('span', { class: 'tool-caret' }, '▸');
+  // com o chip fechado o trabalho do subagente fica invisível; o contador é o
+  // sinal honesto de que tem coisa acontecendo lá dentro
+  const passos = el('span', { class: 'tool-steps', hidden: true });
   const chip = el('button', {
     class: 'chip tool-chip',
     type: 'button',
@@ -33,11 +36,18 @@ export function createToolCall({ name, summary = '', input = '', inputTruncated 
   }, caret, `⚙ ${name}`,
     // resumo já vem pronto de quem traduziu o stream: o componente não sabe o que
     // é "Agent" nem quais campos existem — só mostra o texto que recebeu
-    summary ? el('span', { class: 'tool-summary' }, summary) : null);
+    summary ? el('span', { class: 'tool-summary' }, summary) : null,
+    passos);
 
   const saida = el('pre', { class: 'tool-out' }, 'executando…');
+  // onde entram as chamadas FILHAS (o que um subagente fez). Fica escondido até a
+  // primeira chegar, para uma ferramenta comum não ganhar uma seção vazia.
+  const filhos = el('div', { class: 'tool-kids' });
+  const blocoFilhos = el('div', { class: 'tool-block', hidden: true },
+    el('span', { class: 'tool-key' }, 'passos'), filhos);
   const detalhe = el('div', { class: 'tool-detail' },
     bloco('pedido', input || VAZIO, inputTruncated),
+    blocoFilhos,
     el('div', { class: 'tool-block' }, el('span', { class: 'tool-key' }, 'resultado'), saida));
   detalhe.hidden = !open;
 
@@ -56,8 +66,25 @@ export function createToolCall({ name, summary = '', input = '', inputTruncated 
   chip.addEventListener('click', alterna);
   if (open) caret.textContent = '▾';
 
+  let nFilhos = 0;
+
   const api = {
     node,
+
+    /**
+     * Encaixa uma chamada FILHA (o que um subagente fez). Recebe um nó pronto —
+     * quem monta é quem tem os dados; esta peça só dá o lugar. Aninha em qualquer
+     * profundidade: se o filho também tiver filhos, ele resolve o dele.
+     */
+    addChild(childNode) {
+      if (!childNode) return api;
+      nFilhos += 1;
+      blocoFilhos.hidden = false;
+      passos.hidden = false;
+      passos.textContent = nFilhos === 1 ? '1 passo' : `${nFilhos} passos`;
+      filhos.append(childNode);
+      return api;
+    },
 
     /** O que a ferramenta devolveu. */
     setResult({ text = '', truncated = false, isError = false } = {}) {

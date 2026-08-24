@@ -96,6 +96,7 @@ const b = streamBubble({ role: 'assistant' });      // → controles
 feed.append(b.node);
 b.append('pedaço de texto');   // streaming
 b.addTool('Bash', { id, input });         // compõe o tool-call (chip expansível)
+b.addTool('Bash', { id, parentId: idDoAgent });   // ANINHA dentro do chip do Agent
 b.setToolResult(id, { text, isError });   // casa o retorno pelo id do tool_use
 b.addNotice('limite de uso');  // aviso discreto
 b.setStatus('claude-opus-5');  // chip do cabeçalho
@@ -104,6 +105,12 @@ b.finish('$0.0116 · 1 turno'); // encerra o estado "digitando"
 ```
 
 Quem consome um stream nunca toca no DOM: só chama esses métodos.
+
+**`parentId` é o que faz o subagente aninhar.** Quando ele casa com uma chamada já
+registrada, a nova entra **dentro** dela ([`tool-call`](#tool-calljs) → `addChild`); só
+aparece ao expandir o pai, como no terminal. Funciona em qualquer profundidade, porque o
+filho também fica no mapa e passa a ser pai do neto. `parentId` que não casa com ninguém
+cai no nível de cima — melhor mostrar solto que sumir.
 
 ## `stream-sink.js`
 
@@ -361,10 +368,28 @@ const call = createToolCall({
   onToggle: () => feed.scrollToEnd(),                       // abrir muda a altura
 });
 extras.append(call.node);
+call.addChild(outraCall.node);   // um passo do subagente, DENTRO deste chip
 call.setResult({ text: 'relatório', isError: false });
 call.settle();     // fim do stream: o que não voltou vira "sem resultado"
 call.destroy();    // OBRIGATÓRIO: remove o listener de clique
 ```
+
+### `addChild`: os passos ficam dentro, não do lado
+
+`addChild(nó)` encaixa uma chamada **filha** — o que um subagente fez. Consequências
+visíveis, todas de propósito:
+
+- os passos só aparecem **expandindo** o agente (é o pedido: igual ao terminal);
+- o chip fechado ganha um contador (`3 passos`) — com ele fechado o trabalho ficaria
+  invisível, e sumir com o sinal seria desonesto;
+- a seção "passos" **não existe** numa ferramenta comum: nasce escondida e só aparece
+  quando chega o primeiro filho, então um `Bash` solto não ganha caixa vazia;
+- o componente **não sabe** o que é subagente: recebe um nó pronto e dá o lugar. Quem
+  decide quem é filho de quem é a [`bubble`](#bubblejs), pelo `parentId` do stream.
+
+Aninha em qualquer profundidade — agente que chama agente vira mais um nível, sem código
+novo, porque cada filho é um `tool-call` completo.
+
 
 Quem compõe é a [`bubble`](#bubblejs), pelos dois caminhos:
 

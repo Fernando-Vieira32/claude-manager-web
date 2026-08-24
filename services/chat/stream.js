@@ -68,12 +68,19 @@ export function forward(line, sse) {
     }
 
     case 'assistant': {
+      // `parent_tool_use_id` diz DE QUEM é esta linha: vazio = thread principal;
+      // preenchido = de um subagente, e o valor é o id do `tool_use` que o criou.
+      // É o que permite mostrar o trabalho do subagente DENTRO da chamada dele,
+      // em vez de despejar tudo no mesmo nível (que era o que acontecia).
+      const parentId = event.parent_tool_use_id || null;
       for (const block of event.message?.content || []) {
         if (block?.type === 'text' && block.text) {
-          sse.send({ type: 'message', text: block.text });
+          // prosa de subagente não vai para a bolha principal: o relatório dele
+          // chega inteiro como RESULTADO do próprio Agent
+          if (!parentId) sse.send({ type: 'message', text: block.text });
         } else if (block?.type === 'tool_use') {
           // o `id` correlaciona com o toolResult que vem depois
-          sse.send({ type: 'tool', ...toolFromUse(block) });
+          sse.send({ type: 'tool', ...toolFromUse(block), parentId });
         }
       }
       return;
@@ -83,9 +90,11 @@ export function forward(line, sse) {
     // resultado ao modelo). Antes isto caía no default e era descartado, então o
     // navegador nunca via resposta de ferramenta nenhuma.
     case 'user': {
+      const parentId = event.parent_tool_use_id || null;
       for (const block of event.message?.content || []) {
         if (block?.type !== 'tool_result') continue;
-        sse.send({ type: 'toolResult', ...toolResultFrom(block) });
+        // o casamento é pelo `id`; `parentId` diz em qual thread ele aconteceu
+        sse.send({ type: 'toolResult', ...toolResultFrom(block), parentId });
       }
       return;
     }

@@ -100,12 +100,21 @@ export function streamBubble({ role = 'assistant', who, label = 'pensando…' } 
     /**
      * Registra uso de ferramenta. Compõe o `tool-call`, que é clicável e mostra o
      * que foi pedido e o que voltou — inclusive de um subagente.
+     *
+     * `parentId` é o id da chamada que gerou esta (um subagente rodando Bash). Com
+     * ele a chamada entra DENTRO do chip do pai, só visível ao expandir — como no
+     * terminal. Sem isso o trabalho dos subagentes era despejado no mesmo nível da
+     * conversa, e não dava para saber quem fez o quê. Vale em qualquer
+     * profundidade: agente que chama agente aninha de novo, porque o filho também
+     * fica no mapa e passa a ser "pai" do neto.
      */
-    addTool(name, { id, summary, input, inputTruncated, onToggle } = {}) {
+    addTool(name, { id, parentId, summary, input, inputTruncated, onToggle } = {}) {
       const call = createToolCall({ name, summary, input, inputTruncated, onToggle });
       if (id) tools.set(id, call);
       pendentes.push(call);
-      extras.append(call.node);
+      const pai = parentId ? tools.get(parentId) : null;
+      if (pai) pai.addChild(call.node);
+      else extras.append(call.node);   // pai desconhecido: melhor mostrar solto que sumir
       return api;
     },
 

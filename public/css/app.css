@@ -380,6 +380,18 @@ table.grid tr.accent td:first-child { box-shadow: inset 3px 0 0 var(--row-accent
 .tool-out.tool-none { color: var(--text-faint); font-style: italic; }
 .tool-cut { color: var(--warn); }
 
+/* Passos de um subagente: as chamadas FILHAS vivem dentro do chip do pai, então
+   só aparecem ao expandir — como no terminal. A guia à esquerda mostra o nível,
+   e aninha sozinha em qualquer profundidade (agente que chama agente). */
+.tool-kids {
+  display: flex; flex-wrap: wrap; gap: 6px; min-width: 0;
+  padding-left: 10px; border-left: 2px solid var(--line);
+}
+/* contador no chip fechado: sinal de que tem trabalho lá dentro */
+.tool-steps {
+  color: var(--accent); font-size: 10.5px; white-space: nowrap;
+}
+
 /* ------------------------------------------------ componente composer */
 .composer { display: grid; gap: 8px; }
 .composer-input {

@@ -189,3 +189,53 @@ describe('ciclo de vida da resposta', () => {
     assert.deepEqual(capture({ type: 'rate_limit_event', rate_limit_info: { status: 'allowed' } }), []);
   });
 });
+
+// O CLI marca cada linha vinda de um subagente com `parent_tool_use_id` (o id do
+// `tool_use` que criou aquele agente). Sem propagar isso, o trabalho do subagente
+// era despejado no mesmo nível da conversa e não dava para saber quem fez o quê.
+describe('trabalho de subagente', () => {
+  const usoDoAgente = { type: 'tool_use', id: 'agente-1', name: 'Agent', input: { description: 'Resumir core/' } };
+  const bashDoFilho = { type: 'tool_use', id: 'bash-9', name: 'Bash', input: { command: 'ls core/' } };
+
+  it('chamada da thread principal não tem pai', () => {
+    const [e] = capture(assistantCom(usoDoAgente));
+    assert.equal(e.parentId, null);
+  });
+
+  it('chamada de dentro do subagente aponta para quem a criou', () => {
+    const [e] = capture({ ...assistantCom(bashDoFilho), parent_tool_use_id: 'agente-1' });
+    assert.equal(e.type, 'tool');
+    assert.equal(e.name, 'Bash');
+    assert.equal(e.parentId, 'agente-1');
+  });
+
+  it('resultado também diz em qual thread aconteceu', () => {
+    const [e] = capture({
+      ...userCom({ type: 'tool_result', tool_use_id: 'bash-9', content: 'core' }),
+      parent_tool_use_id: 'agente-1',
+    });
+    assert.equal(e.type, 'toolResult');
+    assert.equal(e.id, 'bash-9');
+    assert.equal(e.parentId, 'agente-1');
+  });
+
+  it('agente dentro de agente mantém a corrente (o pai é o agente do meio)', () => {
+    const [e] = capture({
+      ...assistantCom({ type: 'tool_use', id: 'agente-2', name: 'Agent', input: { description: 'sub-sub' } }),
+      parent_tool_use_id: 'agente-1',
+    });
+    assert.equal(e.parentId, 'agente-1');
+    assert.equal(e.id, 'agente-2');
+  });
+
+  // a prosa do subagente não pode entrar na bolha principal: o relatório dele
+  // chega inteiro como RESULTADO do Agent, e duplicar confunde quem fez o quê
+  it('texto de subagente não vira mensagem da conversa', () => {
+    assert.deepEqual(capture({ ...assistantCom({ type: 'text', text: 'achei 12 arquivos' }), parent_tool_use_id: 'agente-1' }), []);
+  });
+
+  it('texto da thread principal continua virando mensagem', () => {
+    const [e] = capture(assistantCom({ type: 'text', text: 'vou delegar' }));
+    assert.deepEqual(e, { type: 'message', text: 'vou delegar' });
+  });
+});

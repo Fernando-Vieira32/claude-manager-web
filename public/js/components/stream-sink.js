@@ -46,14 +46,19 @@ export function createStreamSink({ bubble, onHint, onScroll } = {}) {
     tool: (e) => {
       bubble.addTool(e.name, {
         id: e.id,
+        parentId: e.parentId,     // subagente: entra dentro do chip do Agent
         summary: e.summary,
         input: e.input,
         inputTruncated: e.inputTruncated,
         // abrir/fechar muda a altura: se o usuário estava no fim, siga no fim
         onToggle: () => onScroll?.(),
       });
-      bubble.setActivity(`usando ${e.name}…`);
-      sawDelta = false;
+      // quem está trabalhando é o subagente: dizer "usando Bash" mentiria sobre
+      // quem faz o quê — o indicador segue no agente
+      if (!e.parentId) {
+        bubble.setActivity(`usando ${e.name}…`);
+        sawDelta = false;
+      }
     },
 
     toolResult: (e) => bubble.setToolResult(e.id, {

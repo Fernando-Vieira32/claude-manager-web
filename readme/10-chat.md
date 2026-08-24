@@ -132,8 +132,8 @@ data: {"type":"done","code":0}
 | `system` | `model` | modelo escolhido |
 | `delta` | `text` | pedaço de texto (streaming) |
 | `message` | `text` | bloco de texto completo |
-| `tool` | `id`, `name`, `summary`, `input`, `inputTruncated` | **chamou** uma ferramenta (`input` já em texto) |
-| `toolResult` | `id`, `text`, `truncated`, `isError` | o que a ferramenta **devolveu** |
+| `tool` | `id`, `name`, `summary`, `input`, `inputTruncated`, `parentId` | **chamou** uma ferramenta (`input` já em texto). `parentId` = id do `Agent` que a disparou (`null` na thread principal) |
+| `toolResult` | `id`, `text`, `truncated`, `isError`, `parentId` | o que a ferramenta **devolveu** (casa pelo `id`; `parentId` diz em que thread aconteceu) |
 | `compact` | `ok`, `message` | resultado da compactação (só no `/compact`) |
 | `notice` | `message` | stderr, aviso de limite de uso |
 | `result` | `ok`, `subtype`, `costUsd`, `turns`, `durationMs` | fim da resposta |
@@ -173,17 +173,62 @@ que a interface trata sem inventar:
 
 O que **não** dá para mostrar, e não é limitação da interface:
 
-| Existe no stream | Não existe |
-| --- | --- |
-| a chamada do subagente (tipo, descrição, prompt) | os passos internos dele |
-| o retorno final de um subagente **síncrono** | as ferramentas que ele usou por dentro |
+### O trabalho do subagente aparece ANINHADO (corrigido)
 
-Medido nos transcripts desta máquina: **583 chamadas de `Agent`** (396 síncronas, 187
-em background) e **zero** linhas com `isSidechain:true` — o CLI não grava os turnos do
-subagente no transcript do pai. E em background o `tool_result` é só o recibo
-(`"Async agent launched successfully. agentId: …"`), porque o relatório chega depois,
-por outro caminho. Então "expandir o subagente ao vivo, aninhado, como no terminal"
-não é alcançável por este canal.
+Cada linha do stream que vem de um subagente traz **`parent_tool_use_id`** — o id do
+`tool_use` que criou aquele agente. O tradutor propaga isso como `parentId`, e a
+interface encaixa a chamada **dentro do chip do `Agent`**: você só vê os passos
+expandindo o agente, como no terminal. Vale em qualquer profundidade — agente que chama
+agente aninha de novo, porque o filho também entra no mapa e passa a ser pai do neto.
+
+```
+▸ ⚙ Agent  Explore · Resumir core/   3 passos     ← fechado: só o contador
+▾ ⚙ Agent  Explore · Resumir core/   3 passos
+    pedido     { subagent_type: "Explore", prompt: "…" }
+    passos   │ ▸ ⚙ Bash  ls core/
+             │ ▸ ⚙ Bash  grep -rn "export"
+             │ ▸ ⚙ Agent  sub-sub          ← e este tem os passos DELE dentro
+    resultado  o relatório que o agente devolveu
+```
+
+Três decisões que vêm com isso:
+
+- **prosa de subagente não entra na bolha principal.** Um bloco de `text` com
+  `parent_tool_use_id` é descartado: o relatório do agente chega inteiro como
+  **resultado** do `Agent`, e duplicar só confundiria quem fez o quê;
+- **o indicador não muda de rótulo.** Quando o `Bash` é do subagente, o cabeçalho segue
+  dizendo `usando Agent…` — dizer "usando Bash" mentiria sobre quem está trabalhando;
+- **pai desconhecido aparece solto.** Se um `parentId` não casar com nenhum chip na tela,
+  a chamada é mostrada no nível de cima em vez de desaparecer.
+
+Detalhe medido: os **deltas** (`stream_event`) **nunca** trazem `parent_tool_use_id`, então
+texto ao vivo é sempre da thread principal — não há risco de o texto do subagente vazar
+como se fosse do Claude principal.
+
+> **Antes estava escrito aqui que isso era impossível.** A medição que sustentava a
+> afirmação (583 chamadas de `Agent`, zero linhas com `isSidechain:true`) olhava o
+> **transcript do pai** — e ali realmente não há nada. O erro foi concluir daí que o
+> *stream* também não tinha. Tem, e sempre teve: era o `parent_tool_use_id` que estávamos
+> ignorando, e por isso o trabalho dos subagentes era despejado no mesmo nível.
+
+### No disco: o que sobra ao reabrir a conversa
+
+O transcript do pai grava **só** a chamada do `Agent` e o resultado dela. Os turnos do
+subagente vão para um arquivo próprio:
+
+```
+~/.claude/projects/<projeto>/<sessionId>/subagents/agent-<agentId>.jsonl
+```
+
+com `isSidechain: true`, `agentId`, o `sessionId` do pai e `parentUuid`. Consequência
+hoje: **ao vivo os passos aparecem aninhados; ao reabrir a conversa fica o chip do
+`Agent` com o resultado, sem os passos.** Não é limite do canal — é feature ainda não
+feita (ler esses arquivos e casar com o `tool_use` do pai; agentes em paralelo
+compartilham o `parentUuid`, então o desempate tem de ser pelo prompt).
+
+Em **background**, o `tool_result` do `Agent` é só o recibo
+(`"Async agent launched successfully. agentId: …"`) — o relatório chega depois, por
+outro caminho.
 
 ## Nova conversa (a tela inicial)
 
