@@ -14,6 +14,25 @@ const isClaudeProcess = (args) => {
   return /(^|\/)claude(\s|$)/.test(args) || /claude.*(cli|index)\.js/.test(args);
 };
 
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * `-p`/`--print` é execução sem terminal — é o que ESTE painel dispara a cada
+ * mensagem do chat. Chamar isso de "sessão aberta num terminal" seria mentira: o
+ * processo é nosso, não de alguém digitando noutra janela.
+ */
+export const isHeadless = (args) => /(^|\s)(-p|--print)(\s|$)/.test(args);
+
+/**
+ * Id que o **próprio comando declara** (`--resume`, `-r`, `--session-id`). Quando
+ * existe, não é palpite: é o que aquele processo abriu. `--resume` sem valor (o
+ * seletor interativo) e `--continue` não declaram nada, e aí voltamos ao palpite.
+ */
+export function declaredSessionId(args) {
+  const m = args.match(/(?:^|\s)(?:--resume|--session-id|-r)(?:=|\s+)(\S+)/);
+  return UUID.test(m?.[1] || '') ? m[1] : null;
+}
+
 export async function listSessions({ q = '' } = {}) {
   const { stdout } = await exec('ps', ['-eo', 'pid=,ppid=,tty=,etime=,etimes=,args=']);
   const sessions = [];
@@ -29,6 +48,13 @@ export async function listSessions({ q = '' } = {}) {
       cwd = await fs.readlink(`/proc/${pid}/cwd`);
     } catch { /* processo pode ter morrido ou não ser nosso */ }
 
+    // certeza vem do comando; palpite (o .jsonl mais novo da pasta) é o resto —
+    // e quem consome PRECISA saber qual dos dois recebeu, senão trata palpite
+    // como fato (foi o que fez a interface jurar que uma conversa recém-criada
+    // pelo navegador estava aberta num terminal)
+    const declared = declaredSessionId(args);
+    const guess = declared || !cwd ? null : await newestSessionFile(cwd);
+
     sessions.push({
       pid: Number(pid),
       ppid: Number(ppid),
@@ -37,7 +63,9 @@ export async function listSessions({ q = '' } = {}) {
       uptimeSeconds: Number(etimes),
       cwd,
       command: args.trim().slice(0, 200),
-      conversationId: cwd ? await newestSessionFile(cwd) : null,
+      kind: isHeadless(args) ? 'headless' : 'interactive',
+      conversationId: declared || guess,
+      conversationSource: declared ? 'args' : (guess ? 'guess' : null),
     });
   }
 

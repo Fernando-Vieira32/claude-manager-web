@@ -150,6 +150,11 @@ input::placeholder, textarea::placeholder { color: var(--text-faint); opacity: 1
 .card-title { font-size: 14px; line-height: 1.35; overflow-wrap: anywhere; }
 .meta { display: flex; flex-wrap: wrap; gap: 8px 12px; color: var(--text-dim); font-size: 12px; }
 .meta .mono { font-family: var(--mono); }
+
+/* componente source-tag (valor + procedência): palpite não tem o peso de fato */
+.src-tag { font-family: var(--mono); }
+.src-tag.guess { color: var(--text-faint); }
+
 .chip {
   display: inline-flex; align-items: center; gap: 5px;
   padding: 2px 8px; border-radius: 999px;
@@ -183,6 +188,13 @@ table.grid th {
 }
 table.grid td { padding: 11px 12px; border-top: 1px solid var(--line); vertical-align: middle; }
 table.grid tr:hover td { background: var(--surface); }
+
+/* Linha com cor escolhida na conversa: faixa à esquerda (a cor exata) + tinta
+   discreta na linha (para achar de olho na rolagem). A cor vem numa variável
+   inline, então isto serve para qualquer cor e funciona nos dois temas. */
+table.grid tr.accent td { background: color-mix(in srgb, var(--row-accent) 8%, transparent); }
+table.grid tr.accent:hover td { background: color-mix(in srgb, var(--row-accent) 18%, var(--surface)); }
+table.grid tr.accent td:first-child { box-shadow: inset 3px 0 0 var(--row-accent); }
 .code { font-family: var(--mono); font-size: 12px; color: var(--text-dim); }
 
 /* --------------------------------------------------------------- drawer */
@@ -334,6 +346,51 @@ table.grid tr:hover td { background: var(--surface); }
 .msg .who { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .bubble-extras { display: flex; flex-wrap: wrap; gap: 6px; }
 .bubble-extras:empty { display: none; }
+
+/* ------------------------------------- componente tool-call (ferramenta) */
+/* Fechado é só um chip na linha das etiquetas; aberto ocupa a linha inteira,
+   senão o detalhe ficaria comprimido ao lado dos outros chips. */
+.tool-call { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.tool-call.open { flex: 1 0 100%; }
+.tool-chip { align-self: flex-start; border: 0; cursor: pointer; font-family: var(--mono); }
+.tool-chip:hover { background: var(--surface); color: var(--text); }
+.tool-chip.err { background: var(--danger-soft); color: var(--danger); }
+.tool-caret { color: var(--text-faint); }
+/* resumo no chip: identifica a chamada sem abrir; corta com … se não couber */
+.tool-summary {
+  color: var(--text-faint); max-width: 46ch;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.tool-detail {
+  display: grid; gap: 8px; min-width: 0;
+  padding: 8px 10px; border-radius: var(--radius-sm);
+  background: var(--bg-2); border: 1px solid var(--line);
+}
+.tool-block { display: grid; gap: 3px; min-width: 0; }
+.tool-key {
+  color: var(--text-faint); font-size: 10.5px;
+  text-transform: uppercase; letter-spacing: .6px;
+}
+.tool-out {
+  margin: 0; max-height: 260px; overflow: auto;
+  white-space: pre-wrap; word-break: break-word;
+  font-family: var(--mono); font-size: 11.5px; color: var(--text-dim);
+}
+.tool-out.tool-err { color: var(--danger); }
+.tool-out.tool-none { color: var(--text-faint); font-style: italic; }
+.tool-cut { color: var(--warn); }
+
+/* Passos de um subagente: as chamadas FILHAS vivem dentro do chip do pai, então
+   só aparecem ao expandir — como no terminal. A guia à esquerda mostra o nível,
+   e aninha sozinha em qualquer profundidade (agente que chama agente). */
+.tool-kids {
+  display: flex; flex-wrap: wrap; gap: 6px; min-width: 0;
+  padding-left: 10px; border-left: 2px solid var(--line);
+}
+/* contador no chip fechado: sinal de que tem trabalho lá dentro */
+.tool-steps {
+  color: var(--accent); font-size: 10.5px; white-space: nowrap;
+}
 
 /* ------------------------------------------------ componente composer */
 .composer { display: grid; gap: 8px; }

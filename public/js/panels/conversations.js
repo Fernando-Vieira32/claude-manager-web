@@ -5,21 +5,40 @@
 import { api } from '../core/api.js';
 import { el, fmt, toast, confirmAction, states } from '../core/ui.js';
 import { createDataTable } from '../components/data-table.js';
-import { createChat } from '../components/chat.js';
-import { createContextMeter } from '../components/context-meter.js';
 import { createInlineEdit } from '../components/inline-edit.js';
-import { createFloatingWindow } from '../components/floating-window.js';
-import { createColorPicker } from '../components/color-picker.js';
-import { MODE_CHOICES } from '../core/chat-fields.js';
+import { createConversationWindow, openConversationWindow } from '../components/conversation-window.js';
+import { MODE_CHOICES, MODEL_CHOICES } from '../core/chat-fields.js';
 
 // Amostras da paleta da janela — as mesmas cores vivas dos tokens do tema.
 const WINDOW_COLORS = ['#ff6a45', '#ff4f8b', '#a855f7', '#3b82f6', '#06b6d4', '#17c964', '#ffb020', '#f43f5e'];
 
-// Estado FORA do ciclo do painel: as janelas de conversa vivem soltas na tela
-// (no <body>) e sobrevivem à navegação entre menus. `refreshList` aponta para o
-// `load()` do painel montado no momento (ou null se não estamos em Conversas), pra
-// uma resposta atualizar a lista só quando ela está visível.
-const openWindows = new Map(); // id da conversa -> { win, chat, meter }
+// A cor entra numa variável CSS inline, então só aceitamos hex de verdade: um valor
+// torto no arquivo de config não pode virar declaração de estilo solta.
+const HEX = /^#[0-9a-fA-F]{3,8}$/;
+
+/**
+ * Estado do medidor de contexto. A janela vem do catálogo da API; quando o
+ * catálogo não está disponível o servidor devolve um palpite, e aí a tela DIZ
+ * que é palpite em vez de exibir um número com cara de verdade.
+ */
+const contextOf = (c) => ({
+  tokens: c.contextTokens,
+  window: c.contextWindow,
+  note: c.contextWindowSource === 'guess'
+    ? 'janela estimada (catálogo de modelos indisponível)'
+    : c.contextNote,
+});
+
+/** `[{ id, settings }]` -> Map(id -> cor), só das conversas com cor válida. */
+const colorsOf = (items) => new Map(items
+  .filter((s) => HEX.test(s.settings?.color || ''))
+  .map((s) => [s.id, s.settings.color]));
+
+// Estado FORA do ciclo do painel: as janelas de conversa vivem soltas na tela (no
+// <body>) e sobrevivem à navegação entre menus — quem guarda quais estão abertas é
+// o `conversation-window`. `refreshList` aponta para o `load()` do painel montado
+// no momento (ou null se não estamos em Conversas), pra uma resposta atualizar a
+// lista só quando ela está visível.
 const opening = new Set();      // ids abrindo agora (evita 2 janelas num clique-duplo)
 let refreshList = null;
 
@@ -41,20 +60,28 @@ export default {
     async function load() {
       body.replaceChildren(states.loading(4));
       try {
-        const { items } = await api.conversations.list(term);
+        // as cores vêm numa requisição só (não uma por conversa); se essa falhar,
+        // a lista ainda aparece — sem cor é muito melhor que sem lista.
+        const [{ items }, cfg] = await Promise.all([
+          api.conversations.list(term),
+          api.settings.all().catch(() => ({ items: [] })),
+        ]);
         ctx.setCount(items.length);
         info.textContent = items.length
           ? `${items.length} conversa(s)${term ? ` casando com "${term}"` : ''}`
           : '';
-        body.replaceChildren(table(items));
+        body.replaceChildren(table(items, colorsOf(cfg.items)));
       } catch (err) {
         body.replaceChildren(states.error(err, load));
       }
     }
 
-    function table(items) {
+    function table(items, colors) {
       return createDataTable({
         rows: items,
+        // a linha da conversa que tem cor configurada nasce marcada, para achar de olho
+        rowClass: (c) => (colors.has(c.id) ? 'accent' : null),
+        rowStyle: (c) => (colors.has(c.id) ? `--row-accent:${colors.get(c.id)}` : null),
         empty: states.empty(
           term ? 'Nada casa com esse filtro' : 'Nenhuma conversa encontrada',
           term ? 'Tente outro termo.' : 'Converse com o Claude Code e volte aqui.'),
@@ -123,90 +150,77 @@ export default {
     // e arrastar, e mexer no resto da página. Fechar a janela NÃO mata o processo
     // (a resposta em andamento termina em segundo plano) — matar é em Sessões.
     async function open(c) {
-      const already = openWindows.get(c.id);
-      if (already) { already.win.focus(); already.chat.composer.focus(); return; }
+      const aberta = openConversationWindow(c.id);
+      if (aberta) { aberta.focus(); return; }
       if (opening.has(c.id)) return;   // já tem um open() desta conversa em andamento
       opening.add(c.id);
 
-      // preferências gravadas desta conversa (modo, cor…) — sobrevivem a fechar/reabrir.
-      // Falha aqui não impede abrir a conversa: só cai no padrão.
+      // preferências gravadas desta conversa (modo, cor, modelo) — sobrevivem a
+      // fechar/reabrir. Falha aqui não impede abrir: só cai no padrão.
       const saved = await api.settings.get(c.id)
         .then((r) => r.settings || {})
         .catch(() => ({}))
         .finally(() => opening.delete(c.id));
-      const saveSetting = (patch) => api.settings.save(c.id, patch)
-        .catch((err) => toast(`Não deu para salvar a configuração: ${err.message}`, { type: 'err' }));
 
-      const meter = createContextMeter({ onCompact: () => compact(c, meter, chat) });
-      meter.set({ tokens: c.contextTokens, window: c.contextWindow, note: c.contextNote });
-
-      let win;
-      const chat = createChat({
-        pageSize: 20,
+      const janela = createConversationWindow({
+        id: c.id,
+        title: c.name || c.title,
+        project: c.project,
+        bytes: c.bytes,
+        model: c.model,
+        context: contextOf(c),
+        settings: saved,
+        modeChoices: MODE_CHOICES,
+        modelChoices: MODEL_CHOICES,
+        swatches: WINDOW_COLORS,
         fetchPage: (opts) => api.conversations.read(c.id, opts),
         send: (text, values, images, onEvent, signal) =>
-          api.chat.send(c.id, { text, mode: values.mode, images }, onEvent, signal),
-        onStop: () => api.chat.stop(c.id),
-        fields: [{
-          name: 'mode', label: 'modo', value: saved.mode || 'none', choices: MODE_CHOICES,
-          onChange: (mode) => saveSetting({ mode }),   // grava assim que troca, mesmo sem enviar
-        }],
-        onState: ({ shown, total }) =>
-          win?.setSubtitle(`${c.project} · ${shown} de ${total} mensagens · ${fmt.bytes(c.bytes)}`),
-        onFinish: () => {
-          chat.reload().catch(() => {});
-          refreshMeter(c, meter);
+          api.chat.send(c.id, { text, mode: values.mode, model: values.model, images }, onEvent, signal),
+        stop: () => api.chat.stop(c.id),
+        onSaveSetting: (patch) => api.settings.save(c.id, patch)
+          // só a cor aparece na lista; não vale redesenhar 60 linhas por trocar de modo
+          .then(() => { if ('color' in patch) refreshList?.(); })
+          .catch((err) => toast(`Não deu para salvar a configuração: ${err.message}`, { type: 'err' })),
+        onCompact: (j) => compact(c, j.meter, j.chat),
+        onFinish: (j) => {
+          j.chat.reload().catch(() => {});
+          refreshMeter(c, j.meter);
           refreshList?.();   // atualiza a lista só se Conversas estiver aberto
         },
       });
 
-      // seletor de cor no cabeçalho da janela: troca a cor E grava na hora
-      const colorPicker = createColorPicker({
-        value: saved.color || '',
-        swatches: WINDOW_COLORS,
-        onChange: (color) => { win?.setAccent(color); saveSetting({ color }); },
-      });
-
-      win = createFloatingWindow({
-        title: (c.name || c.title).slice(0, 70),
-        subtitle: `${c.project} · carregando…`,
-        actions: [colorPicker.node],
-        onClose: () => {
-          openWindows.delete(c.id);
-          chat.destroy({ abort: false }); // fechar não interrompe a resposta
-          meter.destroy();
-          colorPicker.destroy();
-        },
-      });
-      win.setAccent(saved.color || '');   // aplica a cor salva ao abrir
-      win.bodyEl.append(chat.node);
-      win.setFooter([meter.node, chat.footer]);
-      openWindows.set(c.id, { win, chat, meter });
-
-      chat.attach(win.scroller());
       try {
-        await chat.start();
+        await janela.chat.start();
       } catch (err) {
-        win.setTitle('Erro ao ler a conversa');
-        win.setSubtitle(c.sessionId);
-        win.bodyEl.replaceChildren(states.error(err, () => { win.close(); open(c); }));
-        win.setFooter(null);
+        janela.win.setTitle('Erro ao ler a conversa');
+        janela.win.setSubtitle(c.sessionId);
+        janela.win.bodyEl.replaceChildren(states.error(err, () => { janela.win.close(); open(c); }));
+        janela.win.setFooter(null);
         return;
       }
-      chat.composer.focus();
-      warnIfBusy(c, chat);
+      janela.focus();
+      warnIfBusy(c, janela.chat);
     }
 
-    /** Avisa se um terminal parece estar com esta conversa aberta. */
+    /**
+     * Avisa **só quando é esta conversa, com certeza**: um terminal rodando
+     * `claude --resume <este id>`. Nada de "tem um Claude na pasta": pasta não é
+     * conversa, e aviso que não dá para confirmar é barulho — aparecia até em
+     * conversa que o navegador acabou de criar.
+     */
     async function warnIfBusy(c, chat) {
       try {
         const { items } = await api.sessions.list();
-        const live = items.find((s) => s.conversationId === c.sessionId);
-        if (live) {
-          chat.notice(
-            `Esta conversa parece estar aberta num terminal (PID ${live.pid}, ${live.tty || 'sem tty'}). `
-            + 'Enviar daqui grava no mesmo arquivo — evite escrever nos dois ao mesmo tempo.');
-        }
+        // headless é execução deste painel (`claude -p`), não gente digitando —
+        // e conflito nosso com o nosso já é barrado pelo 409 do serviço de chat
+        const mesma = items.find((s) => s.kind !== 'headless'
+          && s.conversationSource === 'args'
+          && s.conversationId === c.sessionId);
+        if (!mesma) return;
+
+        chat.notice(
+          `Esta conversa está aberta num terminal (PID ${mesma.pid}, ${mesma.tty || 'sem tty'}). `
+          + 'Enviar daqui grava no mesmo arquivo — evite escrever nos dois ao mesmo tempo.', 'warn');
       } catch { /* aviso é bônus, não bloqueia */ }
     }
 
@@ -218,8 +232,9 @@ export default {
         const { meta } = await api.conversations.read(c.id, { limit: 1 });
         c.contextTokens = meta.contextTokens;
         c.contextWindow = meta.contextWindow;
+        c.contextWindowSource = meta.contextWindowSource;
         c.contextNote = meta.contextNote;
-        meter.set({ tokens: meta.contextTokens, window: meta.contextWindow, note: meta.contextNote });
+        meter.set(contextOf(meta));
         return meta.contextTokens;
       } catch {
         return null; /* medidor é informativo, não bloqueia */
@@ -239,7 +254,7 @@ export default {
 
       const before = meter.tokens();
       meter.setBusy(true);
-      chat.composer.setBusy(true);
+      chat.composer.setLocked(true, 'compactando… aguarde para escrever');
       let failed = null;
 
       try {
@@ -252,7 +267,7 @@ export default {
       }
 
       meter.setBusy(false);
-      chat.composer.setBusy(false);
+      chat.composer.setLocked(false);
 
       if (failed) {
         toast(`Não deu para compactar: ${failed}`, { type: 'err' });

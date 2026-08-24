@@ -132,12 +132,103 @@ data: {"type":"done","code":0}
 | `system` | `model` | modelo escolhido |
 | `delta` | `text` | pedaço de texto (streaming) |
 | `message` | `text` | bloco de texto completo |
-| `tool` | `name` | usou uma ferramenta |
+| `tool` | `id`, `name`, `summary`, `input`, `inputTruncated`, `parentId` | **chamou** uma ferramenta (`input` já em texto). `parentId` = id do `Agent` que a disparou (`null` na thread principal) |
+| `toolResult` | `id`, `text`, `truncated`, `isError`, `parentId` | o que a ferramenta **devolveu** (casa pelo `id`; `parentId` diz em que thread aconteceu) |
 | `compact` | `ok`, `message` | resultado da compactação (só no `/compact`) |
 | `notice` | `message` | stderr, aviso de limite de uso |
 | `result` | `ok`, `subtype`, `costUsd`, `turns`, `durationMs` | fim da resposta |
 | `error` | `message` | falhou (id inválido, modo proibido, timeout) |
 | `done` | `code`, `signal` | stream fechado |
+
+### Ferramentas e subagentes: o que dá para ver
+
+O chip de cada ferramenta é clicável ([`tool-call`](11-componentes.md#tool-calljs)) e
+abre o **pedido** e o **resultado**. Vale para qualquer ferramenta — `Bash`, `Edit` — e
+também para subagente, que no stream é a ferramenta **`Agent`**, com
+`subagent_type`, `description` e `prompt` dentro do `input`.
+
+O chip também traz um **resumo** ao lado do nome, para identificar a chamada sem abrir:
+`⚙ Agent · Explore · Recon do login`, `⚙ Bash · git status`, `⚙ Edit · core/ui.js`. Quem
+monta é o `summaryOf()` do `core/claude-blocks.js`, e ele é **genérico**: escolhe o
+primeiro campo útil do `input` (`description`, `command`, `pattern`, `query`, `url`,
+`file_path`, `path`, `name`), com `subagent_type` na frente quando existe. Campo de
+caminho mostra as duas últimas partes (o nome do arquivo é o que identifica); nos outros
+o corte vai no fim, porque ali quem identifica é o começo (`git status …`). Ferramenta
+nova que use um desses campos ganha resumo sem ninguém mexer no código.
+
+Vale **ao vivo e ao reabrir a conversa**: a leitura do histórico devolve as mesmas
+ferramentas estruturadas ([03](03-api.md#conversas)), então a interface tem um só
+caminho de render. Isso importa porque, no fim de cada resposta, o painel chama
+`chat.reload()` e redesenha a conversa a partir do disco — enquanto o histórico
+achatava ferramenta em texto, o chip vivia poucos segundos e sumia.
+
+O par `tool` → `toolResult` é casado pelo `id` (o `tool_use_id` do CLI). Dois detalhes
+que a interface trata sem inventar:
+
+- **teto de 4000 caracteres** por lado (`MAX_DETAIL` em `services/chat/repo.js`): o
+  prompt de um subagente e o retorno de um `Read` são grandes demais para o SSE. Quando
+  corta, o evento traz `inputTruncated`/`truncated` e a tela **diz** que cortou;
+- **ferramenta que não devolve nada** no stream não fica "executando…" para sempre: ao
+  fim da resposta o chip passa a dizer *"sem resultado registrado neste stream"*.
+
+O que **não** dá para mostrar, e não é limitação da interface:
+
+### O trabalho do subagente aparece ANINHADO (corrigido)
+
+Cada linha do stream que vem de um subagente traz **`parent_tool_use_id`** — o id do
+`tool_use` que criou aquele agente. O tradutor propaga isso como `parentId`, e a
+interface encaixa a chamada **dentro do chip do `Agent`**: você só vê os passos
+expandindo o agente, como no terminal. Vale em qualquer profundidade — agente que chama
+agente aninha de novo, porque o filho também entra no mapa e passa a ser pai do neto.
+
+```
+▸ ⚙ Agent  Explore · Resumir core/   3 passos     ← fechado: só o contador
+▾ ⚙ Agent  Explore · Resumir core/   3 passos
+    pedido     { subagent_type: "Explore", prompt: "…" }
+    passos   │ ▸ ⚙ Bash  ls core/
+             │ ▸ ⚙ Bash  grep -rn "export"
+             │ ▸ ⚙ Agent  sub-sub          ← e este tem os passos DELE dentro
+    resultado  o relatório que o agente devolveu
+```
+
+Três decisões que vêm com isso:
+
+- **prosa de subagente não entra na bolha principal.** Um bloco de `text` com
+  `parent_tool_use_id` é descartado: o relatório do agente chega inteiro como
+  **resultado** do `Agent`, e duplicar só confundiria quem fez o quê;
+- **o indicador não muda de rótulo.** Quando o `Bash` é do subagente, o cabeçalho segue
+  dizendo `usando Agent…` — dizer "usando Bash" mentiria sobre quem está trabalhando;
+- **pai desconhecido aparece solto.** Se um `parentId` não casar com nenhum chip na tela,
+  a chamada é mostrada no nível de cima em vez de desaparecer.
+
+Detalhe medido: os **deltas** (`stream_event`) **nunca** trazem `parent_tool_use_id`, então
+texto ao vivo é sempre da thread principal — não há risco de o texto do subagente vazar
+como se fosse do Claude principal.
+
+> **Antes estava escrito aqui que isso era impossível.** A medição que sustentava a
+> afirmação (583 chamadas de `Agent`, zero linhas com `isSidechain:true`) olhava o
+> **transcript do pai** — e ali realmente não há nada. O erro foi concluir daí que o
+> *stream* também não tinha. Tem, e sempre teve: era o `parent_tool_use_id` que estávamos
+> ignorando, e por isso o trabalho dos subagentes era despejado no mesmo nível.
+
+### No disco: o que sobra ao reabrir a conversa
+
+O transcript do pai grava **só** a chamada do `Agent` e o resultado dela. Os turnos do
+subagente vão para um arquivo próprio:
+
+```
+~/.claude/projects/<projeto>/<sessionId>/subagents/agent-<agentId>.jsonl
+```
+
+com `isSidechain: true`, `agentId`, o `sessionId` do pai e `parentUuid`. Consequência
+hoje: **ao vivo os passos aparecem aninhados; ao reabrir a conversa fica o chip do
+`Agent` com o resultado, sem os passos.** Não é limite do canal — é feature ainda não
+feita (ler esses arquivos e casar com o `tool_use` do pai; agentes em paralelo
+compartilham o `parentUuid`, então o desempate tem de ser pelo prompt).
+
+Em **background**, o `tool_result` do `Agent` é só o recibo
+(`"Async agent launched successfully. agentId: …"`) — o relatório chega depois, por
+outro caminho.
 
 ## Nova conversa (a tela inicial)
 
@@ -194,6 +285,12 @@ o indicador vivo ([`activity.js`](11-componentes.md#activityjs)): bolinha pulsan
 barra indeterminada e **tempo decorrido**. Ao terminar, o toast dá o feedback honesto
 que interessa — o antes→depois, ex.: `269k → 41k (−85%)`.
 
+Enquanto compacta, a caixa de escrever fica **travada de verdade**
+(`composer.setLocked(true, 'compactando…')`) — e o placeholder diz o porquê. Essa é a
+diferença entre travar e "estar respondendo": mensagem durante uma resposta vai para a
+fila, mas durante o `/compact` não há fila, porque o histórico está sendo reescrito
+debaixo dela. Ver a tabela em [`composer`](11-componentes.md#composerjs).
+
 O tamanho do contexto (ex.: `contexto 258k / 1M`) vem do campo `usage` do último
 turno do assistant no transcript: `input_tokens + cache_read + cache_creation`. A
 janela é inferida (200k, ou 1M quando o uso já passou de 200k) porque o transcript
@@ -204,7 +301,10 @@ serviço que emita os mesmos eventos reaproveita a interface inteira.
 
 ## Proteções
 
-- **uma execução por conversa**: pedir outra enquanto uma responde devolve 409;
+- **uma execução por conversa**: pedir outra enquanto uma responde devolve 409. No
+  navegador você não bate nesse 409 escrevendo: a caixa **não trava** durante a resposta
+  (como no terminal) e a mensagem entra na **fila** do
+  [`chat`](11-componentes.md#chatjs), que só a manda quando a atual termina;
 - **fechar a janela NÃO mata o processo**: cada conversa abre numa
   [janela flutuante](11-componentes.md#floating-windowjs); fechá-la destrói o chat com
   `abort: false`, então a resposta em andamento **termina em segundo plano** (grava no
@@ -214,8 +314,10 @@ serviço que emita os mesmos eventos reaproveita a interface inteira.
   manda `SIGTERM`, sem deixar órfãos;
 - **timeout** vindo das variáveis acima (e **teto de gasto** opcional, se você definir
   `CHAT_MAX_USD` — desligado por padrão);
-- **aviso de conflito**: se um terminal parece estar com essa conversa aberta, uma
-  faixa amarela avisa antes de você escrever (os dois gravam no mesmo arquivo);
+- **aviso de conflito**: se um terminal está com essa conversa aberta **e dá para provar**
+  (o comando dele traz `--resume <este id>`), uma faixa amarela avisa antes de você
+  escrever (os dois gravam no mesmo arquivo). Sem prova, nada é dito — ver
+  [06 · Interface](06-interface.md);
 - erros de validação viram evento `error` no stream (o HTTP já respondeu 200 ao
   abrir o SSE), então a interface sempre mostra a razão.
 
@@ -243,5 +345,7 @@ como o terminal — sem trava artificial de dólar.
   terminal, a execução simplesmente segue com o que o modo permite;
 - **um turno por envio**: cada mensagem é um `-p` completo; não há sessão persistida
   em memória entre envios (o estado vive no `.jsonl`, o que é justamente o ponto);
+- **a fila é do navegador, não do servidor**: mensagem enfileirada vive na aba. Fechar a
+  janela (ou a aba) descarta o que ainda não saiu — o que já foi enviado continua;
 - **`--fork-session` não é usado**: continuar sempre grava na mesma conversa. Se
   quiser "ramificar", é um campo novo no composer e a flag no `args` — 3 linhas.

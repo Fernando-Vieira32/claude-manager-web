@@ -3,10 +3,8 @@ import {
   getConversation,
   deleteConversation,
   renameConversation,
-  listTrash,
-  restoreFromTrash,
-  purgeTrash,
 } from './repo.js';
+import { listTrash, restoreFromTrash, purgeTrash } from './trash.js';
 
 export default {
   id: 'conversations',

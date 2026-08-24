@@ -114,6 +114,8 @@ export function createFloatingWindow({ title = '', subtitle = '', actions = [], 
       return this;
     },
     focus() { focus(); return this; },
+    /** Ainda está na tela? `focus()` numa janela fechada não mostra nada. */
+    isOpen: () => !closed,
     close,
   };
 }

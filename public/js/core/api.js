@@ -124,10 +124,23 @@ export const api = {
 
     /** Config atual da conversa: `{ id, settings }` (settings vazio se nunca salva). */
     get: (id) => api.get(`/api/settings/${encodeURIComponent(id)}`),
+    /**
+     * Config de TODAS as conversas numa requisição: `{ items: [{ id, settings }] }`.
+     * É o que deixa uma lista pintar cada linha sem uma chamada por conversa.
+     */
+    all: () => api.get('/api/settings/all'),
     /** Mescla e grava (PATCH: só o que mudou; valor '' remove a chave). */
     save: (id, patch) => api.put(`/api/settings/${encodeURIComponent(id)}`, patch),
     /** Apaga a config da conversa; devolve `{ id, settings }` (o que existia). */
     remove: (id) => api.del(`/api/settings/${encodeURIComponent(id)}`),
+  },
+
+  // catálogo de modelos: é dele que sai a janela de contexto real
+  models: {
+    /** `{ fetchedAt, models, stale }` — busca da API se o cache venceu. */
+    list: () => api.get('/api/models'),
+    /** Força a busca na API e regrava o cache. */
+    refresh: () => api.post('/api/models/refresh'),
   },
 
   meta: {

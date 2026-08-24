@@ -4,6 +4,9 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { config } from '../../core/config.js';
 import { fold, resolveConversationId } from '../../core/claude-paths.js';
+import { toolFromUse, toolResultFrom } from '../../core/claude-blocks.js';
+import { contextWindowOf, readCatalogCache } from '../../core/claude-models.js';
+import { localStamp } from './trash.js';
 import { badRequest, notFound } from '../../core/http.js';
 
 const cache = new Map();     // path -> { mtimeMs, summary }
@@ -15,6 +18,11 @@ const makeId = (projectDir, file) => `${projectDir}:${file.replace(/\.jsonl$/, '
 // a validação/resolução do id é conhecimento do core (compartilhado com o chat)
 const resolveId = resolveConversationId;
 
+/**
+ * Texto legível de uma mensagem. Ferramenta NÃO entra aqui: ela sai estruturada
+ * em `tools` (ver `loadMessages`), para a interface poder mostrar o pedido e o
+ * resultado. Antes virava um `⚙ nome` cravado no texto, que não dava para abrir.
+ */
 function textOf(content) {
   if (typeof content === 'string') return content;
   if (!Array.isArray(content)) return '';
@@ -23,14 +31,14 @@ function textOf(content) {
       if (typeof block === 'string') return block;
       if (block?.type === 'text') return block.text || '';
       if (block?.type === 'image') return '🖼 imagem';
-      if (block?.type === 'tool_use') return `⚙ ${block.name || 'tool'}`;
-      if (block?.type === 'tool_result') return '';
-      if (block?.type === 'thinking') return '';
       return '';
     })
     .filter(Boolean)
     .join(' ');
 }
+
+/** Blocos de uma mensagem, sempre como array (o conteúdo pode vir string). */
+const blocksOf = (content) => (Array.isArray(content) ? content : []);
 
 const isNoise = (t) => !t || t.startsWith('<') || t.startsWith('Caveat:');
 
@@ -46,10 +54,11 @@ async function parseFile(file) {
   return entries;
 }
 
-async function summarize(file, projectDir, stat) {
+async function summarize(file, projectDir, stat, catalogo = []) {
   const entries = await parseFile(file);
   let cwd = '';
   let title = '';
+  let primeiraFala = '';   // 1a fala do usuario, marcada como humana ou nao
   let name = '';
   let messages = 0;
   let firstTs = null;
@@ -71,14 +80,21 @@ async function summarize(file, projectDir, stat) {
     }
     // o tamanho do contexto é o que o último turno do assistant carregou
     if (e.type === 'assistant' && e.message?.usage) lastUsage = e.message.usage;
-    if (!title && e.type === 'user' && e.origin?.kind === 'human') {
+    // Título = primeira fala do usuário. Preferimos a marcada como humana; se não
+    // houver nenhuma, usamos a primeira fala mesmo assim. Mensagem enviada pelo
+    // navegador vai pelo CLI headless, que NÃO grava `origin.kind` — sem esse
+    // fallback, TODA conversa criada por este app aparecia como "(sem texto)".
+    if (e.type === 'user') {
       const t = textOf(e.message?.content).replace(/\s+/g, ' ').trim();
-      if (!isNoise(t)) title = t.slice(0, 160);
+      if (!isNoise(t)) {
+        if (!primeiraFala) primeiraFala = t.slice(0, 160);
+        if (!title && e.origin?.kind === 'human') title = t.slice(0, 160);
+      }
     }
   }
 
   const label = cwd || path.basename(projectDir);
-  const context = contextFromUsage(lastUsage, model);
+  const context = contextFromUsage(lastUsage, model, catalogo);
   return {
     id: makeId(projectDir, path.basename(file)),
     sessionId: path.basename(file, '.jsonl'),
@@ -86,7 +102,7 @@ async function summarize(file, projectDir, stat) {
     projectLabel: path.basename(label),
     projectDir,
     name: name || null,
-    title: title || '(sem texto)',
+    title: title || primeiraFala || '(sem texto)',
     messages,
     bytes: stat.size,
     modifiedAt: new Date(stat.mtimeMs).toISOString(),
@@ -95,16 +111,18 @@ async function summarize(file, projectDir, stat) {
     model,
     contextTokens: context.tokens,
     contextWindow: context.window,
+    contextWindowSource: context.windowSource || null,
     contextNote: context.note || null,
   };
 }
 
 /**
  * Tokens em contexto no último turno = entrada + o que foi lido/criado em cache.
- * A janela do modelo não vem no transcript; inferimos de forma conservadora
- * (200k, ou 1M quando o uso já passou de 200k — sessões de contexto estendido).
+ * A janela NÃO vem no transcript: vem do catálogo da API (`max_input_tokens`),
+ * em cache no disco. Sem catálogo, cai num palpite pelo nome — que erra, e por
+ * isso vem marcado em `windowSource`.
  */
-function contextFromUsage(usage, model) {
+function contextFromUsage(usage, model, catalogo) {
   if (!usage) return { tokens: null, window: null };
   const tokens = (usage.input_tokens || 0)
     + (usage.cache_read_input_tokens || 0)
@@ -113,8 +131,16 @@ function contextFromUsage(usage, model) {
   // (o resumo). Nesse caso o contexto real ainda não foi medido — só será no
   // próximo turno. Mostrar 0 engana; mostramos "desconhecido" com uma nota.
   if (!tokens) return { tokens: null, window: null, note: 'compactado — recalcula ao enviar' };
+
+  // Janela DE VERDADE, do catálogo da API (`max_input_tokens`).
+  const daApi = contextWindowOf(catalogo, model);
+  if (daApi) return { tokens, window: daApi, windowSource: 'api' };
+
+  // Sem catálogo (primeiro boot, offline, sem credencial) sobra o palpite antigo:
+  // olhar o nome. Ele erra — `claude-opus-5` é 1M e não tem sufixo `[1m]` — então
+  // o número vem marcado como palpite para a interface poder dizer isso.
   const big = /\[1m\]|-1m\b/i.test(model || '') || tokens > 200_000;
-  return { tokens, window: big ? 1_000_000 : 200_000 };
+  return { tokens, window: big ? 1_000_000 : 200_000, windowSource: 'guess' };
 }
 
 export async function listConversations({ q = '' } = {}) {
@@ -124,6 +150,9 @@ export async function listConversations({ q = '' } = {}) {
   } catch {
     return [];
   }
+
+  // um catálogo por listagem: a janela é a mesma para todas as conversas
+  const catalogo = await readCatalogCache();
 
   const items = [];
   for (const dir of projects.filter((d) => d.isDirectory())) {
@@ -140,14 +169,16 @@ export async function listConversations({ q = '' } = {}) {
         stat = await fs.stat(file);
       } catch { continue; }
 
+      // o cache também depende do catálogo: se ele foi atualizado, a janela
+      // gravada no resumo está velha e o resumo precisa ser refeito
       const hit = cache.get(file);
-      if (hit && hit.mtimeMs === stat.mtimeMs) {
+      if (hit && hit.mtimeMs === stat.mtimeMs && hit.catalogAt === catalogo.fetchedAt) {
         items.push(hit.summary);
         continue;
       }
       try {
-        const summary = await summarize(file, dir.name, stat);
-        cache.set(file, { mtimeMs: stat.mtimeMs, summary });
+        const summary = await summarize(file, dir.name, stat, catalogo.models);
+        cache.set(file, { mtimeMs: stat.mtimeMs, catalogAt: catalogo.fetchedAt, summary });
         items.push(summary);
       } catch { /* arquivo ilegível: pula */ }
     }
@@ -199,17 +230,38 @@ async function loadMessages(file) {
 
   const entries = await parseFile(file);
   const messages = [];
+  const porToolId = new Map();   // id do tool_use -> a ferramenta já dentro de messages
+
   for (const e of entries) {
     if (e.type !== 'user' && e.type !== 'assistant') continue;
+    const blocks = blocksOf(e.message?.content);
+
+    // O resultado vem numa mensagem 'user' que não é fala humana: ele casa com a
+    // chamada anterior (pelo id) e NÃO vira mensagem própria na leitura.
+    for (const b of blocks) {
+      if (b?.type !== 'tool_result') continue;
+      const { id, ...result } = toolResultFrom(b);
+      const alvo = porToolId.get(id);
+      if (alvo) alvo.result = result;
+    }
+
+    const tools = blocks.filter((b) => b?.type === 'tool_use').map(toolFromUse);
     const text = textOf(e.message?.content).replace(/\n{3,}/g, '\n\n').trim();
-    if (isNoise(text)) continue;
-    messages.push({
+    // mensagem só-ferramenta não tem texto, mas tem o que mostrar: não é ruído
+    if (isNoise(text) && !tools.length) continue;
+
+    const msg = {
       index: messages.length,
       role: e.type,
       text: text.slice(0, 4000),
       at: e.timestamp || null,
       human: e.origin?.kind === 'human',
-    });
+    };
+    if (tools.length) {
+      msg.tools = tools.map((t) => ({ ...t, result: null }));
+      for (const t of msg.tools) if (t.id) porToolId.set(t.id, t);
+    }
+    messages.push(msg);
   }
 
   if (msgCache.size >= MSG_CACHE_MAX) msgCache.delete(msgCache.keys().next().value);
@@ -233,7 +285,7 @@ export async function getConversation(id, { limit = 20, before } = {}) {
   const start = Math.max(0, end - size);
 
   return {
-    meta: await summarize(file, projectDir, stat),
+    meta: await summarize(file, projectDir, stat, (await readCatalogCache()).models),
     total,
     from: start,
     to: end,
@@ -259,112 +311,3 @@ export async function deleteConversation(id) {
   return { id, trashedAs: path.basename(dest), trashDir: config.trashDir };
 }
 
-/** YYYYMMDD-HHMMSS em hora local — mesmo formato usado pelo claude-manager.sh */
-function localStamp(d = new Date()) {
-  const p = (n) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-` +
-    `${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
-}
-
-const TRASH_NAME_RE = /^(\d{8})-?(\d{6})_(.+)_([A-Za-z0-9-]{8,})\.jsonl$/;
-
-function parseTrashName(name) {
-  const m = TRASH_NAME_RE.exec(name);
-  if (!m) return null;
-  const [, day, time, projectDir, sessionId] = m;
-  const iso = `${day.slice(0, 4)}-${day.slice(4, 6)}-${day.slice(6, 8)}T` +
-    `${time.slice(0, 2)}:${time.slice(2, 4)}:${time.slice(4, 6)}`;
-  const at = new Date(iso);
-  return { projectDir, sessionId, deletedAt: Number.isNaN(+at) ? null : at.toISOString() };
-}
-
-export async function listTrash() {
-  let files = [];
-  try {
-    files = await fs.readdir(config.trashDir);
-  } catch {
-    return [];
-  }
-  const items = [];
-  for (const name of files.filter((f) => f.endsWith('.jsonl'))) {
-    const st = await fs.stat(path.join(config.trashDir, name));
-    const parsed = parseTrashName(name);
-    items.push({
-      name,
-      bytes: st.size,
-      deletedAt: parsed?.deletedAt || new Date(st.mtimeMs).toISOString(),
-      projectDir: parsed?.projectDir || '?',
-      sessionId: parsed?.sessionId || '?',
-    });
-  }
-  items.sort((a, b) => b.deletedAt.localeCompare(a.deletedAt));
-  return items;
-}
-
-export async function restoreFromTrash(name) {
-  if (!/^[A-Za-z0-9._-]+\.jsonl$/.test(name)) throw badRequest('nome inválido');
-  const src = path.join(config.trashDir, name);
-  try {
-    await fs.access(src);
-  } catch {
-    throw notFound('arquivo não está na lixeira');
-  }
-  const parsed = parseTrashName(name);
-  if (!parsed) throw badRequest('nome não segue o padrão data_projeto_sessao.jsonl');
-  const { projectDir, sessionId } = parsed;
-  const destDir = path.join(config.projectsDir, projectDir);
-  await fs.mkdir(destDir, { recursive: true });
-  const dest = path.join(destDir, `${sessionId}.jsonl`);
-  await fs.rename(src, dest);
-  return { restored: `${projectDir}:${sessionId}`, path: dest };
-}
-
-/* ------------------------------------------------------- expurgo da lixeira */
-
-// Recuo em calendário de verdade: 1 mês é "o mesmo dia do mês anterior", não 30
-// dias. Quem chama manda a unidade; este serviço não sabe onde ela foi guardada.
-const UNIT_BACK = {
-  days: (d, n) => d.setDate(d.getDate() - n),
-  months: (d, n) => d.setMonth(d.getMonth() - n),
-  years: (d, n) => d.setFullYear(d.getFullYear() - n),
-};
-
-export const RETENTION_UNITS = Object.keys(UNIT_BACK);
-const MAX_VALUE = 999;
-
-/** Instante a partir do qual o item é considerado antigo (mais velho = expurgável). */
-function cutoffFrom(value, unit) {
-  const n = Number(value);
-  if (!Number.isInteger(n) || n < 1 || n > MAX_VALUE) {
-    throw badRequest(`quantidade inválida: use um inteiro de 1 a ${MAX_VALUE}`);
-  }
-  const back = UNIT_BACK[unit];
-  if (!back) throw badRequest(`unidade inválida: "${unit}" (use ${RETENTION_UNITS.join(', ')})`);
-  const cutoff = new Date();
-  back(cutoff, n);
-  return cutoff;
-}
-
-/**
- * Apaga DE VERDADE (sem volta) os itens da lixeira deletados antes do corte.
- * Com `dryRun`, só diz o que iria embora — é assim que a interface confirma antes.
- * A idade sai do `deletedAt` do `listTrash()`, então lista e expurgo concordam.
- */
-export async function purgeTrash({ value, unit, dryRun = false } = {}) {
-  const cutoff = cutoffFrom(value, unit);
-  const doomed = (await listTrash()).filter((t) => t.deletedAt < cutoff.toISOString());
-  const bytes = doomed.reduce((sum, t) => sum + t.bytes, 0);
-
-  if (!dryRun) {
-    for (const t of doomed) await fs.rm(path.join(config.trashDir, t.name), { force: true });
-  }
-
-  return {
-    dryRun,
-    cutoff: cutoff.toISOString(),
-    retention: { value: Number(value), unit },
-    count: doomed.length,
-    bytes,
-    items: doomed.map((t) => ({ name: t.name, projectDir: t.projectDir, deletedAt: t.deletedAt, bytes: t.bytes })),
-  };
-}

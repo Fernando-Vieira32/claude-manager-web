@@ -52,16 +52,42 @@ curl -s localhost:7788/api/sessions | head -20
       "uptimeSeconds": 2232,
       "cwd": "/home/fernando",
       "command": "claude",
-      "conversationId": "57316179-7a65-49bc-940d-ce557e574dfa"
+      "kind": "interactive",
+      "conversationId": "57316179-7a65-49bc-940d-ce557e574dfa",
+      "conversationSource": "guess"
     }
   ]
 }
 ```
 
-`conversationId` é **palpite**: o `.jsonl` mais recente da pasta do projeto
-correspondente ao `cwd`. O Claude não mantém o arquivo aberto num descritor, então
-não existe ligação exata processo → conversa. Com duas sessões no mesmo diretório
-o palpite pode errar.
+`conversationSource` diz **de onde saiu** o `conversationId` — e sem isso quem consome
+trata palpite como fato:
+
+| valor | significa | de onde vem |
+| --- | --- | --- |
+| `args` | **certeza**: é a conversa que aquele processo abriu | o próprio comando: `--resume <id>`, `-r <id>`, `--session-id <id>` |
+| `guess` | **palpite**: pode ser outra | o `.jsonl` mais recente da pasta do projeto correspondente ao `cwd` |
+| `null` | não se sabe | sem `cwd` legível e sem id no comando |
+
+O Claude **não** mantém o transcript aberto num descritor (conferido em
+`/proc/<pid>/fd`: só tty, epoll e `/dev/urandom`), e um `claude` cru do terminal não
+declara id nenhum — então para ele não existe ligação exata processo → conversa. Daí a
+etiqueta, em vez de fingir precisão.
+
+`kind` separa **`interactive`** (alguém digitando num terminal) de **`headless`**
+(`-p`/`--print` — é o que o chat *deste painel* dispara a cada mensagem). Sem isso os
+próprios processos do painel apareciam como "sessão aberta num terminal".
+
+> **Por que isso importa.** O aviso "esta conversa está aberta num terminal" era disparado
+> pelo palpite. Criar uma conversa pelo navegador torna o `.jsonl` dela o mais recente da
+> pasta — então o terminal que estava ali virava "dono" da conversa recém-criada, e a
+> interface avisava sobre um conflito que não existia. Hoje **só `args` avisa**: sem
+> certeza a interface fica calada, nem com um aviso hedged ("tem um Claude nesta pasta"),
+> que foi tentado e removido por ser barulho. Ver [06 · Interface](06-interface.md).
+>
+> Consequência aceita: um `claude` cru num terminal **nunca** dispara o aviso. Preferimos
+> não avisar a avisar errado — quem quiser a proteção abre o terminal com
+> `claude --resume <id>`.
 
 `q` filtra por PID, tty, `cwd`, comando e id da conversa, ignorando acentos e
 maiúsculas.
@@ -145,10 +171,35 @@ curl -s "localhost:7788/api/conversations/$ID?limit=5&before=5"
   "hasMore": true,
   "messages": [
     { "index": 90, "role": "user", "text": "…", "at": "2026-…", "human": true },
-    { "index": 91, "role": "assistant", "text": "⚙ Bash", "at": "2026-…", "human": false }
+    {
+      "index": 91, "role": "assistant", "text": "", "at": "2026-…", "human": false,
+      "tools": [
+        {
+          "id": "toolu_01…", "name": "Bash", "summary": "Listar arquivos",
+          "input": "{\n  \"command\": \"ls -la\"\n}", "inputTruncated": false,
+          "result": { "text": "total 20\ndrwxrwxr-x …", "truncated": false, "isError": false }
+        }
+      ]
+    }
   ]
 }
 ```
+
+**Ferramentas vêm estruturadas em `tools`** (só quando a mensagem usou alguma):
+
+- `input` é o que foi pedido, já em texto; `result` é o que voltou, ou `null` se a
+  ferramenta ainda não devolveu (resposta em andamento);
+- `summary` é a frase curta que o chip mostra ao lado do nome (pode ser `null`); a regra
+  de escolha está em [10 · Chat](10-chat.md#ferramentas-e-subagentes-o-que-dá-para-ver);
+- o par é casado pelo `id` (o `tool_use_id` do CLI): o resultado vive numa entrada
+  `user` do `.jsonl`, e a leitura o costura de volta na chamada em vez de virar uma
+  mensagem solta;
+- teto de 4000 caracteres por lado (`MAX_DETAIL` em `core/claude-blocks.js`), com
+  `inputTruncated`/`truncated` avisando quando cortou;
+- uma mensagem que **só** usou ferramenta tem `text` vazio e **não** é descartada —
+  antes ela virava o texto `⚙ Bash` e o detalhe não existia;
+- é o mesmo formato que o chat emite ao vivo ([10](10-chat.md#eventos-do-stream)), então
+  a interface tem um só caminho de render para conversa ao vivo e conversa relida.
 
 A janela é contada **do fim para o começo**, como um feed:
 
@@ -162,16 +213,19 @@ A janela é contada **do fim para o começo**, como um feed:
 - `before` maior que `total` é tratado como o fim; `before=0` devolve lista vazia
   com `hasMore: false`;
 - cada mensagem tem `index` estável dentro do arquivo;
-- cada conversa traz `contextTokens` (uso do último turno) e `contextWindow`
-  (janela inferida) — base do medidor de contexto na interface. Logo após um
+- cada conversa traz `contextTokens` (uso do último turno), `contextWindow` (a
+  janela do modelo) e `contextWindowSource` (`"api"` ou `"guess"`) — base do medidor
+  de contexto na interface. A janela vem do [catálogo de modelos](#modelos-models);
+  `"guess"` significa que o catálogo não estava disponível e o número é palpite, e
+  aí a interface **diz** isso em vez de mostrá-lo como fato. Logo após um
   `/compact`, a CLI grava um turno `<synthetic>` com uso zerado; nesse caso
   `contextTokens` vem `null` e `contextNote` = "compactado — recalcula ao enviar"
   (mostrar `0` enganaria — o tamanho real só é medido no próximo turno);
 - as mensagens legíveis ficam em cache por `mtime` (até 8 arquivos), então paginar
   não relê o `.jsonl` a cada rolagem.
 
-Blocos de ferramenta aparecem como `⚙ <nome>`; `thinking` e `tool_result` são
-omitidos.
+Bloco `thinking` é omitido. Ferramenta **não** entra no `text`: sai em `tools` (acima),
+e o `tool_result` é costurado no `result` da chamada em vez de descartado.
 
 Deletar e restaurar:
 
@@ -249,6 +303,67 @@ curl -s "localhost:7788/api/fs?path=/home/fernando/www"
 
 Só diretórios, em ordem alfabética; pastas ocultas (começando com `.`) ficam de fora.
 
+## Modelos (`models`)
+
+Catálogo vindo de `GET https://api.anthropic.com/v1/models`, em cache em
+`data/models.json`. **É o único ponto do app que faz chamada de rede externa.**
+
+| Método | Rota | O quê |
+| --- | --- | --- |
+| GET | `/api/models` | catálogo (busca da API se o cache venceu): `{ fetchedAt, models, stale }` |
+| POST | `/api/models/refresh` | força a busca e regrava o cache |
+| GET | `/api/models/:id` | um modelo pelo id |
+
+```bash
+curl -s localhost:7788/api/models | head -20
+```
+
+```json
+{
+  "fetchedAt": "2026-08-24T19:32:15.359Z",
+  "source": "api",
+  "stale": false,
+  "models": [
+    { "id": "claude-opus-5", "displayName": "Claude Opus 5",
+      "createdAt": "2026-07-24T00:00:00Z",
+      "maxInputTokens": 1000000, "maxOutputTokens": 128000 }
+  ]
+}
+```
+
+### Por que isto existe
+
+A janela de contexto **não está no transcript**. Ela era adivinhada pelo nome do
+modelo (`/\[1m\]/.test(model) || tokens > 200_000 ? 1M : 200k`), e `claude-opus-5`
+não tem sufixo `[1m]` — então o medidor mostrava **200k numa conversa de 1M**, em
+praticamente toda conversa. Agora sai de `max_input_tokens` da API.
+
+**O campo é `max_input_tokens`, não `context_window`** — esse campo não existe na
+resposta. `max_tokens` é o teto de *saída*, não a janela.
+
+### Detalhes que custaram um teste cada
+
+- **A API responde 404 para alias e para variante.** `GET /v1/models/opus` e
+  `GET /v1/models/claude-opus-5[1m]` falham, mas o transcript grava exatamente
+  essas formas. Por isso buscamos a **lista** (10 modelos, uma requisição) e o
+  casamento acontece no `core/claude-models.js`: sufixo `[…]`/`-fast` é removido, e
+  alias (`opus`, `sonnet`, `haiku`, `fable`) resolve para o **mais novo** daquela
+  família — que é o que o alias significa;
+- `<synthetic>` (o turno que o `/compact` grava) não é modelo e não resolve nada;
+- **TTL de 24 h.** O catálogo muda em lançamento, não por hora. Se a busca falhar e
+  houver cache, a resposta vem com `stale: true` e o motivo em `error` — dado velho
+  e sinalizado é melhor que tela vazia;
+- **o caminho de leitura nunca chama a rede.** Listar conversas só lê o cache
+  (`readCatalogCache()` no core); quem busca é este serviço. Sem cache, a janela cai
+  no palpite antigo e vem marcada como `"guess"`.
+
+### Autenticação
+
+Ordem: `ANTHROPIC_API_KEY` (cabeçalho `x-api-key`) → a credencial do CLI já logado
+nesta máquina (`~/.claude/.credentials.json` → `Authorization: Bearer` + o cabeçalho
+`anthropic-beta: oauth-2025-04-20`, que o token OAuth exige). Sem nenhuma das duas,
+a rota responde 409 dizendo o que fazer, e o resto do app segue funcionando.
+
 ## Configurações (`settings`)
 
 Preferências chave/valor gravadas em arquivo, em **dois escopos com a mesma regra**:
@@ -268,9 +383,38 @@ preferência nova sem tocar no serviço.
 | --- | --- | --- |
 | GET | `/api/settings` | lê a configuração global (`{ settings }`) |
 | PUT | `/api/settings` | mescla e grava a global (body: objeto chave/valor) |
+| GET | `/api/settings/all` | config de **todas** as conversas de uma vez (para listas) |
 | GET | `/api/settings/:id` | lê a configuração da conversa (`{ id, settings }`) |
 | PUT | `/api/settings/:id` | mescla e grava (body: objeto chave/valor) |
 | DELETE | `/api/settings/:id` | apaga a config da conversa; devolve `{ id, settings }` (o que existia) |
+
+### `GET /api/settings/all` — por que existe
+
+Uma lista precisa saber a cor de **dezenas** de conversas para desenhar. Uma
+requisição por conversa (57 no meu caso) é inaceitável, e `conversations` não pode
+ler `settings` — serviço não conhece serviço ([02](02-arquitetura.md)). Então quem
+oferece o lote é o próprio serviço de configuração.
+
+```bash
+curl -s localhost:7788/api/settings/all
+```
+
+```json
+{
+  "items": [
+    { "id": "-home-fernando-www-hisofi:1007aa54-…", "settings": { "color": "#17c964" } },
+    { "id": "-home-fernando:9e934df4-…",            "settings": { "color": "#ff6a45", "mode": "plan" } }
+  ]
+}
+```
+
+- devolve **só quem tem alguma chave gravada** — conversa sem config não aparece;
+- a rota é registrada **antes** de `/:id`, senão `all` seria casado como se fosse um
+  id (o router casa na ordem de registro);
+- o `id` é reconstruído a partir do nome do arquivo: na gravação o `:` virou `_`, e o
+  `sessionId` nunca tem `_`, então o **último** `_` é sempre o separador. O resultado
+  passa pelo `resolveConversationId`, então arquivo estranho na pasta é ignorado em vez
+  de virar um id inventado.
 
 ```bash
 curl -s localhost:7788/api/settings
@@ -307,7 +451,8 @@ curl -s -X PUT "localhost:7788/api/settings/$(...)" \
 - **voltar ao padrão:** valor `""` ou `null` **remove** a chave (`{"color":""}` apaga a cor);
 - chaves são curtas e alfanuméricas (`^[a-zA-Z0-9_-]{1,40}$`); valores só
   texto/número/booleano; o arquivo tem teto de 16 KB — id ou chave inválidos dão 400;
-- hoje a interface usa `mode` (modo do chat) e `color` (cor da janela), mas o formato
+- hoje a interface usa `mode` (modo do chat), `model` (modelo escolhido para os
+  próximos envios) e `color` (cor da janela), mas o formato
   é genérico: dá para acrescentar chaves sem mexer no serviço.
 
 **Limpeza ao deletar.** Quando uma conversa vai para a lixeira, o painel também chama

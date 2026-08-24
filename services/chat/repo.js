@@ -14,6 +14,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { resolveConversationId, cwdOfConversation, encodeProject } from '../../core/claude-paths.js';
 import { badRequest, notFound, conflict } from '../../core/http.js';
+import { forward } from './stream.js';
 
 const WRITE_TOOLS = ['Bash', 'Write', 'Edit', 'MultiEdit', 'NotebookEdit', 'Task'];
 const NET_TOOLS = ['WebFetch', 'WebSearch'];
@@ -284,88 +285,3 @@ async function runClaude({ conversationId, sessionId, cwd, prompt, extraArgs, mo
   });
 }
 
-/** Traduz o subtype de erro do `result` numa mensagem clara para o usuário. */
-function explainResult(subtype) {
-  switch (subtype) {
-    case 'error_max_budget_usd':
-      return `atingiu o teto de gasto por mensagem ($${MAX_USD}) que você definiu em `
-        + 'CHAT_MAX_USD. Aumente o valor ou remova a variável para não ter teto.';
-    case 'error_max_turns':
-      return 'atingiu o limite de turnos para esta resposta.';
-    case 'error_during_execution':
-      return 'erro durante a execução do Claude (veja o log do servidor).';
-    default:
-      return subtype ? `falhou (${subtype})` : 'falhou';
-  }
-}
-
-/** Traduz uma linha do stream-json do CLI em um evento simples para o front. */
-function forward(line, sse) {
-  const raw = line.trim();
-  if (!raw) return;
-  if (!raw.startsWith('{')) {
-    sse.send({ type: 'notice', message: raw.slice(0, 500) });
-    return;
-  }
-
-  let event;
-  try {
-    event = JSON.parse(raw);
-  } catch {
-    return;
-  }
-
-  switch (event.type) {
-    case 'system':
-      if (event.subtype === 'init') {
-        sse.send({ type: 'system', model: event.model, sessionId: event.session_id });
-      } else if (event.subtype === 'status') {
-        if (event.compact_error) {
-          sse.send({ type: 'compact', ok: false, message: String(event.compact_error).slice(0, 300) });
-        } else if (event.compact_result !== undefined) {
-          sse.send({ type: 'compact', ok: true, message: 'contexto compactado' });
-        }
-      }
-      return;
-
-    case 'stream_event': {
-      const inner = event.event;
-      if (inner?.type === 'content_block_delta' && inner.delta?.type === 'text_delta') {
-        sse.send({ type: 'delta', text: inner.delta.text });
-      }
-      return;
-    }
-
-    case 'assistant': {
-      for (const block of event.message?.content || []) {
-        if (block?.type === 'text' && block.text) {
-          sse.send({ type: 'message', text: block.text });
-        } else if (block?.type === 'tool_use') {
-          sse.send({ type: 'tool', name: block.name });
-        }
-      }
-      return;
-    }
-
-    case 'result':
-      sse.send({
-        type: 'result',
-        ok: !event.is_error,
-        subtype: event.subtype,
-        message: event.is_error ? explainResult(event.subtype) : undefined,
-        text: event.result || '',
-        costUsd: event.total_cost_usd ?? null,
-        turns: event.num_turns ?? null,
-        durationMs: event.duration_api_ms ?? null,
-      });
-      return;
-
-    case 'rate_limit_event':
-      if (event.rate_limit_info?.status && event.rate_limit_info.status !== 'allowed') {
-        sse.send({ type: 'notice', message: `limite de uso: ${event.rate_limit_info.status}` });
-      }
-      return;
-
-    default:
-  }
-}

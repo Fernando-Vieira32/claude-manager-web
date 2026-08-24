@@ -6,23 +6,15 @@
 // serviço de conversas + chat; amanhã serve para o editor conversar sobre um
 // arquivo, ou para um agente qualquer.
 //
-// Contrato dos eventos que `send` deve entregar a `onEvent` (é o que o
-// /api/chat emite):
-//   { type:'init',    sessionId, cwd, mode }       começou
-//   { type:'system',  model }                      modelo escolhido
-//   { type:'delta',   text }                       pedaço de texto
-//   { type:'message', text }                       texto completo de um bloco
-//   { type:'tool',    name }                       usou uma ferramenta
-//   { type:'notice',  message }                    aviso (stderr, limite de uso)
-//   { type:'result',  ok, subtype, costUsd, turns } fim da resposta
-//   { type:'error',   message }                    falhou
-//   { type:'done' }                                stream fechado
+// Os eventos que `send` entrega a `onEvent` (o que o /api/chat emite) são
+// traduzidos pelo `stream-sink.js`; o contrato está em readme/10-chat.md.
 
 import { el } from '../core/ui.js';
 import { createFeed } from './feed.js';
 import { createComposer } from './composer.js';
-import { messageBubble, streamBubble } from './bubble.js';
+import { messageBubble, streamBubble, clearBadge } from './bubble.js';
 import { createQuickReplies } from './quick-replies.js';
+import { createStreamSink } from './stream-sink.js';
 import { detectOptions } from '../core/detect-options.js';
 
 /**
@@ -60,6 +52,8 @@ export function createChat({
 
   let controller = null;
   let liveBubble = null;
+  let rodando = false;      // uma resposta por vez
+  const fila = [];          // mensagens digitadas durante a resposta
   let quickReplies = null;
   const qrHost = el('div', { class: 'qr-host' });
 
@@ -97,72 +91,63 @@ export function createChat({
     } catch { /* já pode ter terminado */ }
   }
 
-  async function run(text, values, images = []) {
+  /**
+   * Envia — ou ENFILEIRA, se uma resposta já está correndo. É o comportamento do
+   * terminal: você digita durante a resposta e a mensagem espera a vez. Antes a
+   * caixa travava até a resposta acabar.
+   */
+  function run(text, values, images = []) {
+    if (rodando) {
+      const urls = images.map((im) => `data:${im.media_type};base64,${im.data}`);
+      const node = messageBubble({
+        role: 'user', text, at: new Date().toISOString(), images: urls, badge: 'na fila',
+      });
+      feed.append(node);
+      feed.scrollToEnd();
+      fila.push({ text, values, images, node });
+      return Promise.resolve();
+    }
+    return ciclo(text, values, images, null);
+  }
+
+  /** Uma resposta por vez: termina uma, puxa a próxima da fila, até esvaziar. */
+  async function ciclo(text, values, images, node) {
+    rodando = true;
+    let atual = { text, values, images, node };
+    try {
+      while (atual) {
+        await enviar(atual.text, atual.values, atual.images, atual.node);
+        atual = fila.shift() || null;
+      }
+    } finally {
+      rodando = false;
+    }
+  }
+
+  async function enviar(text, values, images = [], jaNaTela = null) {
     clearQuickReplies();
     composer.setBusy(true);
     composer.setHint('enviando…');
 
-    const urls = images.map((im) => `data:${im.media_type};base64,${im.data}`);
-    feed.append(messageBubble({ role: 'user', text, at: new Date().toISOString(), images: urls }));
+    // se veio da fila, a bolha já está na tela: só tira o "na fila"
+    if (jaNaTela) clearBadge(jaNaTela);
+    else {
+      const urls = images.map((im) => `data:${im.media_type};base64,${im.data}`);
+      feed.append(messageBubble({ role: 'user', text, at: new Date().toISOString(), images: urls }));
+    }
 
     const bubble = streamBubble({ role: 'assistant' });
     liveBubble = bubble;
     feed.append(bubble.node);
     feed.scrollToEnd();
 
-    let sawDelta = false;
     controller = new AbortController();
-
-    const onEvent = (event) => {
-      switch (event.type) {
-        case 'init':
-          composer.setHint(`modo: ${event.mode} · ${event.cwd || ''}`);
-          break;
-
-        case 'system':
-          // modelo vira um chip ao lado do indicador — sem apagar o "pensando…"
-          if (event.model) bubble.setStatus(event.model, 'accent');
-          break;
-
-        case 'delta':
-          if (!sawDelta) bubble.setActivity('escrevendo…');
-          sawDelta = true;
-          bubble.append(event.text);
-          feed.scrollToEnd();
-          break;
-
-        case 'message':
-          // com streaming ligado o texto já veio em deltas; só usa se faltou
-          if (!sawDelta && event.text) bubble.append(event.text);
-          break;
-
-        case 'tool':
-          bubble.addTool(event.name);
-          bubble.setActivity(`usando ${event.name}…`);
-          sawDelta = false;   // depois da ferramenta o Claude volta a "pensar/escrever"
-          break;
-
-        case 'notice':
-          bubble.addNotice(event.message);
-          break;
-
-        case 'result': {
-          const parts = [];
-          if (event.costUsd != null) parts.push(`$${event.costUsd.toFixed(4)}`);
-          if (event.turns != null) parts.push(`${event.turns} turno(s)`);
-          if (event.ok) bubble.finish(parts.join(' · ') || 'pronto');
-          else bubble.setError(event.message || event.subtype || 'falhou');
-          composer.setHint(parts.join(' · '));
-          break;
-        }
-
-        case 'error':
-          bubble.setError(event.message);
-          break;
-
-        default:
-      }
-    };
+    // a tradução dos eventos do stream vive no `stream-sink` (peça separada)
+    const onEvent = createStreamSink({
+      bubble,
+      onHint: (t) => composer.setHint(t),
+      onScroll: () => feed.scrollToEnd(),
+    });
 
     let interrupted = false;
     try {
@@ -175,7 +160,8 @@ export function createChat({
       controller = null;
       liveBubble = null;
       bubble.finish();
-      composer.setBusy(false);
+      // com fila cheia continuamos "respondendo": não pisca o rótulo para "Enviar"
+      if (!fila.length) composer.setBusy(false);
       feed.scrollToEnd();
       onFinish?.();
       // se a resposta foi uma pergunta com opções, oferece botões de resposta rápida
@@ -195,6 +181,13 @@ export function createChat({
     start() { return feed.loadFirst(); },
     reload() { return feed.loadFirst(); },
 
+    /**
+     * Envia um texto por código, com os valores atuais dos campos — o mesmo
+     * caminho do clique em "Enviar" e das respostas rápidas. Serve para quem abre
+     * a vista já com uma primeira mensagem (e imagens) em mão.
+     */
+    submit(text, images = []) { return run(text, composer.values(), images); },
+
     /** Aviso acima da caixa de escrever (ex.: conversa aberta num terminal). */
     notice(text, kind) { composer.setNotice(text, kind); return this; },
 
@@ -209,6 +202,8 @@ export function createChat({
         liveBubble?.destroy();
       }
       liveBubble = null;
+      // quem foi fechado não continua mandando: a fila morre com a vista
+      fila.length = 0;
       clearQuickReplies();
       feed.destroy();
     },

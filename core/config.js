@@ -22,6 +22,10 @@ export const config = {
   settingsDir: path.join(dataDir, 'conversas'),
   // preferências do app inteiro (retenção da lixeira…) — mesmo par chave/valor, um arquivo só
   globalSettingsFile: path.join(dataDir, 'settings.json'),
+  // catálogo de modelos vindo da API (janela de contexto real), em cache no disco
+  modelsCacheFile: path.join(dataDir, 'models.json'),
+  // credencial do CLI: é dela que sai o token para consultar a API de modelos
+  claudeCredentialsFile: path.join(claudeDir, '.credentials.json'),
   publicDir: path.join(rootDir, 'public'),
   servicesDir: path.join(rootDir, 'services'),
   // corpo de requisição: grande o bastante para imagens coladas (base64) no chat

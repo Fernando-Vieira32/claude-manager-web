@@ -7,11 +7,17 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { createSandbox, givenConversation, trashNames } from './helpers/sandbox.js';
 
+// O ciclo cruza os dois módulos: deletar é do repo (mexe nos caches da conversa),
+// listar/restaurar é da lixeira. `repo` abaixo é a união dos dois, de propósito —
+// o teste descreve o comportamento, não onde a função mora.
 let box, repo;
 
 before(async () => {
   box = await createSandbox();
-  repo = await import('../services/conversations/repo.js');
+  repo = {
+    ...(await import('../services/conversations/repo.js')),
+    ...(await import('../services/conversations/trash.js')),
+  };
 });
 after(() => box.cleanup());
 

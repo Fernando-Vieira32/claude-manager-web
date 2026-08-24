@@ -69,6 +69,13 @@ Criador de elementos: `class`, `html`, `dataset`, qualquer `on*` como listener,
 demais chaves como atributos. Filhos podem ser string, Node, array ou `null`
 (ignorado) — dá para escrever `cond ? el(…) : null` sem `if`.
 
+**Valor `null`/`undefined`/`false` faz a chave ser ignorada — inclusive `class`.** Isso
+importa porque o padrão `class: cond ? 'x' : null` é usado à vontade no projeto: antes a
+checagem existia só no ramo dos atributos, então `class: null` caía em
+`node.className = null` e o DOM gravava a **string "null"** (havia 171 elementos com
+`class="null"` na página). Não quebrava seletor nenhum, mas era sujeira esperando alguém
+definir `.null`.
+
 ```js
 fmt.bytes(61234)   // "60KB"
 fmt.when(iso)      // "agora", "38 min atrás", "2 h atrás", "18/08 12:03"
@@ -129,6 +136,7 @@ states.error(err, () => load())  // mensagem + botão "Tentar de novo"
 | `toolbar-line` | linha de contexto acima da lista (contagem, switches) |
 | `switch` | rótulo + checkbox (ex.: "atualizar a cada 5s") |
 | `msg`, `msg user`, `msg assistant` | bolhas de conversa no drawer |
+| `ctx-*` | medidor de contexto (rótulo, barra, alerta) |
 | `skeleton`, `state` | carregando e estados vazios |
 
 Regra de ouro no CSS: `[hidden] { display: none !important; }` está no topo do
@@ -139,25 +147,63 @@ arquivo porque vários componentes usam `display: grid/flex` — sem isso o atri
 
 | Painel | Arquivo | Particularidades |
 | --- | --- | --- |
-| Nova conversa | `panels/new-conversation.js` | tela inicial; barra de modelo/pasta/modo + `chat`; inicia a conversa (`api.chat.start`) e depois continua |
-| Sessões | `panels/sessions.js` | auto-refresh de 5s com `destroy()` limpando o timer; SIGTERM → oferta de SIGKILL no toast |
-| Conversas | `panels/conversations.js` | compõe `data-table` + `chat` + `context-meter` + `inline-edit` (renomear) + `color-picker`; abre em janelas flutuantes (várias, não-modais) com modo/cor salvos por conversa; deletar com "Desfazer" |
+| Nova conversa | `panels/new-conversation.js` | **lançador**: barra de modelo/pasta/modo + `composer`; ao enviar a primeira mensagem a conversa **abre numa janela** ([`conversation-window`](11-componentes.md#conversation-windowjs)) — a mesma de "Ler" |
+| Sessões | `panels/sessions.js` | auto-refresh de 5s com `destroy()` limpando o timer; SIGTERM → oferta de SIGKILL no toast; a conversa da sessão é desenhada pelo [`source-tag`](11-componentes.md#source-tagjs) — sai marcada **`(palpite)`** quando não é certeza —, e execuções `-p` levam o chip **`headless`** |
+| Conversas | `panels/conversations.js` | compõe `data-table` + `inline-edit` (renomear) + [`conversation-window`](11-componentes.md#conversation-windowjs); **a linha da lista aparece na cor configurada** (faixa + tinta, via `rowClass`/`rowStyle` — ver [11](11-componentes.md#destacar-uma-linha)); deletar com "Desfazer" |
 | Lixeira | `panels/trash.js` | filtro local (a lista é pequena), restauração e expurgo por idade ([`duration-field`](11-componentes.md#duration-fieldjs) + retenção na config global) |
 | Serviços | `panels/services.js` | desenha `/api/_services`: documentação que não desatualiza |
 
 ## Leitor e chat de conversas
 
 Cada conversa abre numa [janela flutuante](11-componentes.md#floating-windowjs)
-(arrastável, redimensionável, não-modal — dá para abrir várias) que compõe
-`data-table` → `chat` (`feed` + `composer`): abre com as 20 últimas mensagens roladas
-até o fim, libera as anteriores ao subir e tem a caixa de escrever no rodapé fixo.
-Fechar a janela não interrompe uma resposta em curso (ela termina em segundo plano).
-Contratos em [11 · Componentes](11-componentes.md); o servidor em [10 · Chat](10-chat.md).
+(arrastável, redimensionável, não-modal — dá para abrir várias) montada pelo
+[`conversation-window`](11-componentes.md#conversation-windowjs): abre com as 20 últimas
+mensagens roladas até o fim, libera as anteriores ao subir e tem a caixa de escrever no
+rodapé fixo. Fechar a janela não interrompe uma resposta em curso (ela termina em
+segundo plano). Contratos em [11 · Componentes](11-componentes.md); o servidor em
+[10 · Chat](10-chat.md).
+
+### Aviso de "aberta num terminal": só com certeza
+
+A faixa amarela "Esta conversa está aberta num terminal (PID …)" sai **só** quando algum
+processo declara no comando `--resume <o id desta conversa>` — o `conversationSource:
+'args'` de [03 · API](03-api.md#sessões). Nos outros casos **não aparece nada**.
+
+Não existe meio-termo aqui, e isso é decisão, não falta de vontade:
+
+- **conversa nova é sessão nova.** Criar uma conversa pelo navegador não pode avisar
+  nada — não há como ela estar aberta em outro lugar. Antes avisava, porque o aviso saía
+  do **palpite** (o `.jsonl` mais recente da pasta) e o mais recente tinha acabado de ser
+  criado por nós mesmos;
+- **pasta não é conversa.** "Há um Claude rodando nesta pasta" chegou a existir como
+  faixa cinza e foi removido: é verdade e é inútil — não dá para confirmar se é *esta*
+  conversa, então só ocupa espaço e ensina a ignorar avisos;
+- **um `claude` cru de terminal não declara id nenhum**, então para ele o aviso nunca
+  sai. Quem quiser o aviso funcionando abre o terminal com `claude --resume <id>`;
+- execuções `headless` (`-p`) são ignoradas: são deste painel, e dois envios na mesma
+  conversa já batem no 409 do serviço de chat.
+
+**A caixa não trava enquanto o Claude responde** — igual ao terminal. Mandou durante uma
+resposta? A mensagem aparece na hora com a etiqueta `na fila` e é enviada sozinha quando
+a atual terminar (o botão diz "Enfileirar" justamente para isso não ser surpresa). O que
+trava de verdade é o **compactar**, e aí o placeholder da caixa explica. Detalhe em
+[`chat`](11-componentes.md#chatjs).
+
+**Os dois caminhos abrem a MESMA janela.** Clicar em "Ler" na lista e iniciar uma
+conversa nova compõem o mesmo componente — e ele guarda quais estão abertas, então
+começar uma conversa e depois clicar em "Ler" nela **foca a janela existente** em vez de
+abrir uma segunda. Antes a conversa nova ficava embutida no painel: outro lugar, outra
+aparência, e ela saía de vista ao trocar de aba.
+
+**No cabeçalho:** `projeto · N de M mensagens · tamanho · modelo`. O modelo ali é o que
+**respondeu de fato** (vem do transcript); o seletor de modelo no rodapé é o que vale
+para o **próximo** envio — os dois podem divergir, e é por isso que aparecem separados.
 
 **Preferências por conversa (salvas em arquivo).** Cada conversa lembra o **modo** do
-chat (só conversa/plano/…) e uma **cor** para a janela — não se perde ao fechar e
-reabrir. O modo grava assim que você troca; a cor sai do seletor 🎨 no cabeçalho da
-janela (amostras + cor livre; "Padrão" remove). Tudo vai para um arquivo por conversa
+chat (só conversa/plano/…), o **modelo** e uma **cor** para a janela — não se perde ao
+fechar e reabrir. Modo e modelo gravam assim que você troca, mesmo sem enviar; a cor sai
+do seletor 🎨 no cabeçalho da janela (amostras + cor livre; "Padrão" remove). Tudo vai
+para um arquivo por conversa
 em `data/conversas/` (dentro do projeto, ignorado no git), pelo serviço
 [`settings`](03-api.md#configurações-settings) — o vínculo arquivo ↔ conversa é o `:id`
 único da conversa. É chave/valor, então dá para lembrar mais coisas no futuro sem mexer

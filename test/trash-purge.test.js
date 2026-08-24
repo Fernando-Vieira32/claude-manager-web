@@ -10,7 +10,7 @@ let box, repo;
 
 before(async () => {
   box = await createSandbox();
-  repo = await import('../services/conversations/repo.js');
+  repo = await import('../services/conversations/trash.js');
 });
 after(() => box.cleanup());
 beforeEach(() => fs.rm(box.trashDir, { recursive: true, force: true }));

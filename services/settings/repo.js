@@ -72,6 +72,48 @@ export async function getSettings(id) {
   return { id, settings: await read(fileFor(id)) };
 }
 
+/**
+ * Caminho de volta: nome do arquivo -> id da conversa. Na gravação o ':' virou
+ * '_' (ver `fileFor`), e o sessionId nunca tem '_', então o ÚLTIMO '_' é sempre o
+ * separador. Valida pelo `resolveConversationId` para não inventar id a partir de
+ * arquivo estranho na pasta.
+ */
+function idFromFile(name) {
+  const base = name.replace(/\.json$/, '');
+  const cut = base.lastIndexOf('_');
+  if (cut < 1) return null;
+  const id = `${base.slice(0, cut)}:${base.slice(cut + 1)}`;
+  try {
+    resolveConversationId(id);
+    return id;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Todas as configs de uma vez. Existe porque uma LISTA precisa saber a cor de
+ * dezenas de conversas ao desenhar: uma requisição por conversa seria absurdo.
+ * Devolve só quem tem alguma chave gravada.
+ */
+export async function listAllSettings() {
+  let files = [];
+  try {
+    files = await fs.readdir(config.settingsDir);
+  } catch {
+    return [];                                   // pasta nem existe: ninguém configurou nada
+  }
+
+  const items = [];
+  for (const name of files.filter((f) => f.endsWith('.json'))) {
+    const id = idFromFile(name);
+    if (!id) continue;
+    const settings = await read(path.join(config.settingsDir, name));
+    if (Object.keys(settings).length) items.push({ id, settings });
+  }
+  return items;
+}
+
 /** Recusa o que não é par chave/valor simples, antes de encostar no disco. */
 function validate(patch) {
   if (!patch || typeof patch !== 'object' || Array.isArray(patch)) {

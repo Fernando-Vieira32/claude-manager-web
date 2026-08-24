@@ -46,8 +46,16 @@ export function createContextMeter({ onCompact, warnAt = 0.75 } = {}) {
         bar.hidden = true;
         return api;
       }
+      // Sem janela conhecida não há porcentagem honesta: mostra o total e para.
+      // (Antes caía num `|| 200_000` fixo, que desenhava uma barra inventada.)
+      const win = Number.isFinite(window) && window > 0 ? window : null;
+      if (!win) {
+        bar.hidden = true;
+        label.textContent = `contexto ${fmt.compact(tokens)}${note ? ` · ${note}` : ''}`;
+        return api;
+      }
+
       bar.hidden = false;
-      const win = window || 200_000;
       const frac = Math.min(tokens / win, 1);
       fill.style.width = `${Math.max(frac * 100, 2)}%`;
       bar.classList.toggle('warn', frac >= warnAt);
