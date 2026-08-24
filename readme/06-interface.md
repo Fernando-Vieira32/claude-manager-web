@@ -78,11 +78,17 @@ fmt.clock(iso)     // data e hora completas (bom para title=)
 ```js
 toast('Sessão encerrada.', { type: 'ok' });            // ok | err | info
 toast('Conversa na lixeira.', {
-  type: 'ok', timeout: 8000,
+  type: 'ok',
   action: { label: 'Desfazer', run: () => restaurar() },
 });
 ```
-Passar o mouse por cima cancela o timer de fechamento.
+Fecha sozinho em **5 s** (`TOAST_MS`, exportado do `ui.js`). O `timeout` é opcional e
+serve para pedir *menos* tempo: ele é limitado ao teto, então passar `9000` não estica
+nada — não existe toast permanente.
+
+Passar o mouse por cima **adia** o fechamento enquanto o ponteiro estiver ali (dá tempo
+de mirar o "Desfazer"); ao sair, o relógio recomeça. Fechar pelo botão de ação também
+cancela o timer, sem deixar `setTimeout` pendente.
 
 ```js
 const ok = await confirmAction({

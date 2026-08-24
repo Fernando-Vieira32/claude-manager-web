@@ -287,7 +287,6 @@ export default {
         const prevCfg = await api.settings.remove(c.id).then((r) => r.settings || {}).catch(() => ({}));
         toast('Conversa movida para a lixeira.', {
           type: 'ok',
-          timeout: 8000,
           action: {
             label: 'Desfazer',
             run: async () => {
