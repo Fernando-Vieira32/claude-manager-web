@@ -78,7 +78,8 @@ commits depois.
 ## `bubble.js`
 
 ```js
-messageBubble({ role: 'user', text, at, badge });   // → Node
+messageBubble({ role: 'user', text, at, badge });          // → Node
+messageBubble(msgDaApi);   // com `tools`, já monta os chips de ferramenta resolvidos
 ```
 
 ```js
@@ -215,9 +216,15 @@ call.settle();     // fim do stream: o que não voltou vira "sem resultado"
 call.destroy();    // OBRIGATÓRIO: remove o listener de clique
 ```
 
-Quem compõe é a [`bubble`](#bubblejs), via `addTool(name, { id, input, … })` e
-`setToolResult(id, payload)` — o `id` é o `tool_use_id`, que casa a chamada com o
-retorno. A `bubble` resolve e destrói todas no `finish()`/`setError()`/`destroy()`.
+Quem compõe é a [`bubble`](#bubblejs), pelos dois caminhos:
+
+- **ao vivo** (`streamBubble`): `addTool(name, { id, input, … })` e depois
+  `setToolResult(id, payload)`. A bolha resolve e destrói todas no
+  `finish()`/`setError()`/`destroy()`;
+- **no histórico** (`messageBubble`): recebe `tools: [{ id, name, input, result }]` da
+  API e já monta cada chip resolvido. Aqui **não** há `destroy()` — o listener do
+  `tool-call` está no próprio nó dele, então morre quando o feed remove a bolha. Só o
+  que escuta `document`/`window` ou usa timer precisa de destruição explícita.
 
 Três decisões de honestidade (regra 8 do projeto):
 

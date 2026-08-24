@@ -147,6 +147,12 @@ abre o **pedido** e o **resultado**. Vale para qualquer ferramenta — `Bash`, `
 também para subagente, que no stream é a ferramenta **`Agent`**, com
 `subagent_type`, `description` e `prompt` dentro do `input`.
 
+Vale **ao vivo e ao reabrir a conversa**: a leitura do histórico devolve as mesmas
+ferramentas estruturadas ([03](03-api.md#conversas)), então a interface tem um só
+caminho de render. Isso importa porque, no fim de cada resposta, o painel chama
+`chat.reload()` e redesenha a conversa a partir do disco — enquanto o histórico
+achatava ferramenta em texto, o chip vivia poucos segundos e sumia.
+
 O par `tool` → `toolResult` é casado pelo `id` (o `tool_use_id` do CLI). Dois detalhes
 que a interface trata sem inventar:
 

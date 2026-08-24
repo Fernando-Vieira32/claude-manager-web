@@ -20,6 +20,7 @@ core/
   registry.js            descobre services/*/service.js e monta as rotas
   static.js              serve public/ com mime types
   claude-paths.js        o que se sabe sobre ~/.claude (layout, ids, fold de acentos)
+  claude-blocks.js       o que se sabe sobre os blocos de mensagem (texto, ferramenta, imagem)
 services/
   sessions/service.js    MANIFESTO (id, basePath, routes)
   sessions/repo.js       regra de negócio: ps, /proc, kill
@@ -141,7 +142,10 @@ export default {
 
 ## Regras que mantêm o acoplamento baixo
 
-- serviço **não** importa outro serviço — o que é comum vai para `core/`;
+- serviço **não** importa outro serviço — o que é comum vai para `core/`. Foi assim que
+  nasceu o `core/claude-blocks.js`: `chat` lê blocos do stream e `conversations` lê os
+  mesmos blocos do `.jsonl`; cada um tinha sua cópia e elas divergiram (uma mostrava o
+  resultado da ferramenta, a outra jogava fora);
 - serviço **não** toca em `req`/`res`: devolve dados ou lança `ApiError`;
 - painel **não** usa `fetch`: só `api.*` de `js/core/api.js`;
 - painel **não** conhece outro painel: navegação é `ctx.go(id)`;

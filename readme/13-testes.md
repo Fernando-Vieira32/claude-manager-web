@@ -27,6 +27,12 @@ o que é essencial aqui — veja o sandbox abaixo.
 | `test/trash-lifecycle.test.js` | deletar → lixeira → restaurar: conteúdo preservado, padrão do nome, `deletedAt` vindo do nome (não do `mtime`), travessia de diretório recusada |
 | `test/settings.test.js` | os **dois escopos** (global e por conversa) contra os mesmos casos: mesclagem PATCH, `''`/`null` removendo chave, chave/valor inválidos, teto de 16 KB, arquivo ilegível, escopos não se misturando |
 | `test/settings-concurrency.test.js` | regressão do bug de gravação concorrente (ver [07](07-seguranca.md)) |
+| `test/chat-stream.test.js` | tradução do stream-json do CLI: linha entra, eventos do contrato saem — ferramenta com `id`/`input`, `toolResult` casado, teto de tamanho, linha quebrada, tipo desconhecido, custo/turnos, limite de uso |
+| `test/conversations-messages.test.js` | leitura do histórico: `tools` estruturadas, `tool_result` costurado pelo id, mensagem só-de-ferramenta não descartada, resultado órfão, várias ferramentas numa mensagem |
+
+Os dois últimos cobrem a mesma regra pelos dois lados — ao vivo (stream) e relido
+(disco) — porque foi justamente a **divergência** entre esses dois caminhos que criou o
+bug do chip que sumia. Hoje os dois passam pelo `core/claude-blocks.js`.
 
 Fora de escopo: `toast`, componentes e painéis. Testar DOM exigiria trazer jsdom ou
 Playwright como dependência — o custo não paga, e quebraria a premissa do projeto.

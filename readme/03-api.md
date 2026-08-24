@@ -145,10 +145,33 @@ curl -s "localhost:7788/api/conversations/$ID?limit=5&before=5"
   "hasMore": true,
   "messages": [
     { "index": 90, "role": "user", "text": "…", "at": "2026-…", "human": true },
-    { "index": 91, "role": "assistant", "text": "⚙ Bash", "at": "2026-…", "human": false }
+    {
+      "index": 91, "role": "assistant", "text": "", "at": "2026-…", "human": false,
+      "tools": [
+        {
+          "id": "toolu_01…", "name": "Bash",
+          "input": "{\n  \"command\": \"ls -la\"\n}", "inputTruncated": false,
+          "result": { "text": "total 20\ndrwxrwxr-x …", "truncated": false, "isError": false }
+        }
+      ]
+    }
   ]
 }
 ```
+
+**Ferramentas vêm estruturadas em `tools`** (só quando a mensagem usou alguma):
+
+- `input` é o que foi pedido, já em texto; `result` é o que voltou, ou `null` se a
+  ferramenta ainda não devolveu (resposta em andamento);
+- o par é casado pelo `id` (o `tool_use_id` do CLI): o resultado vive numa entrada
+  `user` do `.jsonl`, e a leitura o costura de volta na chamada em vez de virar uma
+  mensagem solta;
+- teto de 4000 caracteres por lado (`MAX_DETAIL` em `core/claude-blocks.js`), com
+  `inputTruncated`/`truncated` avisando quando cortou;
+- uma mensagem que **só** usou ferramenta tem `text` vazio e **não** é descartada —
+  antes ela virava o texto `⚙ Bash` e o detalhe não existia;
+- é o mesmo formato que o chat emite ao vivo ([10](10-chat.md#eventos-do-stream)), então
+  a interface tem um só caminho de render para conversa ao vivo e conversa relida.
 
 A janela é contada **do fim para o começo**, como um feed:
 
@@ -170,8 +193,8 @@ A janela é contada **do fim para o começo**, como um feed:
 - as mensagens legíveis ficam em cache por `mtime` (até 8 arquivos), então paginar
   não relê o `.jsonl` a cada rolagem.
 
-Blocos de ferramenta aparecem como `⚙ <nome>`; `thinking` e `tool_result` são
-omitidos.
+Bloco `thinking` é omitido. Ferramenta **não** entra no `text`: sai em `tools` (acima),
+e o `tool_result` é costurado no `result` da chamada em vez de descartado.
 
 Deletar e restaurar:
 

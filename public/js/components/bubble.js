@@ -9,10 +9,25 @@ const WHO = { user: 'você', assistant: 'claude', system: 'sistema' };
 
 /**
  * Bolha estática de uma mensagem já conhecida.
- * @param {{role?:string, text?:string, at?:string, who?:string, badge?:string, images?:string[]}} msg
- *        images: URLs (data:...) para miniatura das imagens enviadas.
+ *
+ * `tools` faz a mensagem lida do disco mostrar as ferramentas do mesmo jeito que
+ * ao vivo — antes elas viravam um `⚙ nome` de texto e o detalhe se perdia quando
+ * a resposta terminava e a conversa era relida.
+ *
+ * @param {{role?:string, text?:string, at?:string, who?:string, badge?:string,
+ *          images?:string[], tools?:Array<object>, onToggleTool?:Function}} msg
  */
-export function messageBubble({ role = 'assistant', text = '', at, who, badge, images } = {}) {
+export function messageBubble({ role = 'assistant', text = '', at, who, badge, images, tools, onToggleTool } = {}) {
+  // Sem destroy() aqui de propósito: o listener do tool-call está no próprio nó
+  // dele, então morre junto quando o feed remove a bolha. Só o que escuta
+  // document/window ou usa timer precisa de destroy explícito.
+  const calls = (tools || []).map((t) => {
+    const call = createToolCall({ ...t, onToggle: onToggleTool });
+    if (t.result) call.setResult(t.result);
+    else call.settle();          // já terminou: não fica "executando…" para sempre
+    return call.node;
+  });
+
   return el('div', { class: `msg ${role}` },
     el('div', { class: 'who' },
       `${who || WHO[role] || role}${at ? ` · ${fmt.when(at)}` : ''}`,
@@ -20,7 +35,8 @@ export function messageBubble({ role = 'assistant', text = '', at, who, badge, i
     images && images.length
       ? el('div', { class: 'msg-imgs' }, ...images.map((src) => el('img', { class: 'msg-img', src, alt: 'imagem enviada' })))
       : null,
-    text ? el('pre', {}, text) : null);
+    text ? el('pre', {}, text) : null,
+    calls.length ? el('div', { class: 'bubble-extras' }, ...calls) : null);
 }
 
 /**

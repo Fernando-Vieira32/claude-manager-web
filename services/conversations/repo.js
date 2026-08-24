@@ -4,6 +4,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { config } from '../../core/config.js';
 import { fold, resolveConversationId } from '../../core/claude-paths.js';
+import { toolFromUse, toolResultFrom } from '../../core/claude-blocks.js';
 import { badRequest, notFound } from '../../core/http.js';
 
 const cache = new Map();     // path -> { mtimeMs, summary }
@@ -15,6 +16,11 @@ const makeId = (projectDir, file) => `${projectDir}:${file.replace(/\.jsonl$/, '
 // a validação/resolução do id é conhecimento do core (compartilhado com o chat)
 const resolveId = resolveConversationId;
 
+/**
+ * Texto legível de uma mensagem. Ferramenta NÃO entra aqui: ela sai estruturada
+ * em `tools` (ver `loadMessages`), para a interface poder mostrar o pedido e o
+ * resultado. Antes virava um `⚙ nome` cravado no texto, que não dava para abrir.
+ */
 function textOf(content) {
   if (typeof content === 'string') return content;
   if (!Array.isArray(content)) return '';
@@ -23,14 +29,14 @@ function textOf(content) {
       if (typeof block === 'string') return block;
       if (block?.type === 'text') return block.text || '';
       if (block?.type === 'image') return '🖼 imagem';
-      if (block?.type === 'tool_use') return `⚙ ${block.name || 'tool'}`;
-      if (block?.type === 'tool_result') return '';
-      if (block?.type === 'thinking') return '';
       return '';
     })
     .filter(Boolean)
     .join(' ');
 }
+
+/** Blocos de uma mensagem, sempre como array (o conteúdo pode vir string). */
+const blocksOf = (content) => (Array.isArray(content) ? content : []);
 
 const isNoise = (t) => !t || t.startsWith('<') || t.startsWith('Caveat:');
 
@@ -199,17 +205,38 @@ async function loadMessages(file) {
 
   const entries = await parseFile(file);
   const messages = [];
+  const porToolId = new Map();   // id do tool_use -> a ferramenta já dentro de messages
+
   for (const e of entries) {
     if (e.type !== 'user' && e.type !== 'assistant') continue;
+    const blocks = blocksOf(e.message?.content);
+
+    // O resultado vem numa mensagem 'user' que não é fala humana: ele casa com a
+    // chamada anterior (pelo id) e NÃO vira mensagem própria na leitura.
+    for (const b of blocks) {
+      if (b?.type !== 'tool_result') continue;
+      const { id, ...result } = toolResultFrom(b);
+      const alvo = porToolId.get(id);
+      if (alvo) alvo.result = result;
+    }
+
+    const tools = blocks.filter((b) => b?.type === 'tool_use').map(toolFromUse);
     const text = textOf(e.message?.content).replace(/\n{3,}/g, '\n\n').trim();
-    if (isNoise(text)) continue;
-    messages.push({
+    // mensagem só-ferramenta não tem texto, mas tem o que mostrar: não é ruído
+    if (isNoise(text) && !tools.length) continue;
+
+    const msg = {
       index: messages.length,
       role: e.type,
       text: text.slice(0, 4000),
       at: e.timestamp || null,
       human: e.origin?.kind === 'human',
-    });
+    };
+    if (tools.length) {
+      msg.tools = tools.map((t) => ({ ...t, result: null }));
+      for (const t of msg.tools) if (t.id) porToolId.set(t.id, t);
+    }
+    messages.push(msg);
   }
 
   if (msgCache.size >= MSG_CACHE_MAX) msgCache.delete(msgCache.keys().next().value);

@@ -13,6 +13,7 @@ import { existsSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { resolveConversationId, cwdOfConversation, encodeProject } from '../../core/claude-paths.js';
+import { toolFromUse, toolResultFrom } from '../../core/claude-blocks.js';
 import { badRequest, notFound, conflict } from '../../core/http.js';
 
 const WRITE_TOOLS = ['Bash', 'Write', 'Edit', 'MultiEdit', 'NotebookEdit', 'Task'];
@@ -300,40 +301,6 @@ function explainResult(subtype) {
 }
 
 /** Traduz uma linha do stream-json do CLI em um evento simples para o front. */
-// Teto do detalhe de uma ferramenta. O `input` de um subagente carrega o prompt
-// inteiro (milhares de caracteres) e um `tool_result` pode ser um arquivo todo —
-// mandar cru entupiria o SSE e o navegador. Truncamos e AVISAMOS que truncou.
-const MAX_DETAIL = 4000;
-
-/** Valor do CLI -> texto legível com teto. `{ text, truncated }` ou null. */
-function detail(value) {
-  if (value === undefined || value === null) return null;
-  const raw = typeof value === 'string' ? value : JSON.stringify(value, null, 2);
-  if (!raw) return null;
-  return raw.length > MAX_DETAIL
-    ? { text: raw.slice(0, MAX_DETAIL), truncated: true }
-    : { text: raw, truncated: false };
-}
-
-/**
- * Conteúdo de um `tool_result` -> texto. Vem como string ou como lista de blocos.
- * (O `conversations/repo.js` tem um irmão disto; serviço não importa serviço, então
- * a repetição é imposta pela arquitetura — ver readme/02.)
- */
-function resultText(content) {
-  if (typeof content === 'string') return content;
-  if (!Array.isArray(content)) return '';
-  return content
-    .map((b) => {
-      if (typeof b === 'string') return b;
-      if (b?.type === 'text') return b.text || '';
-      if (b?.type === 'image') return '🖼 imagem';
-      return '';
-    })
-    .filter(Boolean)
-    .join('\n');
-}
-
 /**
  * Traduz uma linha do stream-json do CLI num evento do contrato do chat
  * (ver readme/10-chat.md). Exportado para teste: é a peça com mais regra por
@@ -380,14 +347,8 @@ export function forward(line, sse) {
         if (block?.type === 'text' && block.text) {
           sse.send({ type: 'message', text: block.text });
         } else if (block?.type === 'tool_use') {
-          const input = detail(block.input);
-          sse.send({
-            type: 'tool',
-            id: block.id || null,        // correlaciona com o toolResult que vem depois
-            name: block.name,
-            input: input?.text || null,
-            inputTruncated: input?.truncated || false,
-          });
+          // o `id` correlaciona com o toolResult que vem depois
+          sse.send({ type: 'tool', ...toolFromUse(block) });
         }
       }
       return;
@@ -399,14 +360,7 @@ export function forward(line, sse) {
     case 'user': {
       for (const block of event.message?.content || []) {
         if (block?.type !== 'tool_result') continue;
-        const out = detail(resultText(block.content));
-        sse.send({
-          type: 'toolResult',
-          id: block.tool_use_id || null,
-          text: out?.text || '',
-          truncated: out?.truncated || false,
-          isError: Boolean(block.is_error),
-        });
+        sse.send({ type: 'toolResult', ...toolResultFrom(block) });
       }
       return;
     }
