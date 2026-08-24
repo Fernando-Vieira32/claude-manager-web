@@ -88,6 +88,7 @@ curl -s -X POST localhost:7788/api/sessions/30498/kill \
 | DELETE | `/api/conversations/:id` | move para a lixeira |
 | GET | `/api/conversations/trash` | lista a lixeira |
 | POST | `/api/conversations/trash/restore` | restaura (`{ "name": "..." }`) |
+| POST | `/api/conversations/trash/purge` | apaga de vez o que é mais velho que a retenção |
 
 O `:id` é composto: `<pastaDoProjeto>:<sessionId>`, por exemplo
 `-home-fernando:57316179-7a65-49bc-940d-ce557e574dfa`. Isso evita ambiguidade
@@ -186,6 +187,35 @@ Deletar **nunca** apaga: renomeia para `~/.claude/.trash-conversas` com o padrã
 `AAAAMMDD-HHMMSS_<projeto>_<sessao>.jsonl` — o mesmo formato usado pelo script de
 terminal antigo, então a lixeira é compartilhada entre os dois.
 
+### Expurgo da lixeira (o único jeito de apagar de vez)
+
+A lixeira **não expira sozinha**: nada, em lugar nenhum, remove arquivo dali por
+tempo. Quem apaga de vez é esta rota, sempre a pedido.
+
+```bash
+# quem IRIA embora, sem apagar nada (é o preview que a confirmação da UI usa)
+curl -s -X POST localhost:7788/api/conversations/trash/purge \
+  -H 'content-type: application/json' -d '{"value":30,"unit":"days","dryRun":true}'
+# { "dryRun": true, "cutoff": "2026-07-25T13:08:54.865Z",
+#   "retention": { "value": 30, "unit": "days" },
+#   "count": 4, "bytes": 1210304, "items": [ { "name": "…", "projectDir": "…", … } ] }
+
+# de verdade (sem volta): mesma chamada sem dryRun
+curl -s -X POST localhost:7788/api/conversations/trash/purge \
+  -H 'content-type: application/json' -d '{"value":1,"unit":"days"}'
+```
+
+- `unit` é `days`, `months` ou `years`; `value` é inteiro de 1 a 999 — fora disso, 400;
+- **meses e anos são calendário de verdade** (`setMonth`/`setFullYear`), não "30 dias":
+  1 mês atrás é o mesmo dia do mês anterior;
+- a idade sai do `deletedAt` do `GET /trash` (que vem do **nome** do arquivo), então
+  lista e expurgo nunca discordam. O `mtime` é do conteúdo original e é ignorado —
+  `rename` o preserva, então ele não diz nada sobre quando você deletou;
+- `dryRun` existe para a interface confirmar com número e tamanho reais. A regra de
+  idade vive **só** aqui — a interface não recalcula corte nenhum;
+- a retenção usada é a que o painel manda. Este serviço **não** lê a configuração:
+  serviço não conhece serviço ([02](02-arquitetura.md)), quem junta os dois é o painel.
+
 ## Chat (continuar a conversa)
 
 | Método | Rota | O quê |
@@ -221,18 +251,42 @@ Só diretórios, em ordem alfabética; pastas ocultas (começando com `.`) ficam
 
 ## Configurações (`settings`)
 
-Preferências **por conversa** (modo do chat, cor da janela…), gravadas em arquivo
-para sobreviver a fechar/reabrir. Uma conversa = um arquivo JSON em
-`data/conversas/` (dentro do projeto, ignorado no git). O vínculo arquivo ↔ conversa
-é o próprio `:id` da conversa (`<pastaDoProjeto>:<sessionId>`), único; o `:` vira `_`
-no nome do arquivo. É chave/valor puro — o serviço **não** interpreta o que cada
-chave significa (isso é da interface).
+Preferências chave/valor gravadas em arquivo, em **dois escopos com a mesma regra**:
+
+| Escopo | Arquivo | Para quê |
+| --- | --- | --- |
+| **global** | `data/settings.json` (um só) | preferência do app inteiro — hoje a retenção da lixeira |
+| **por conversa** | `data/conversas/<id>.json` (um por conversa) | modo do chat, cor da janela… |
+
+Os dois ficam dentro do projeto e são ignorados no git. No escopo por conversa, o
+vínculo arquivo ↔ conversa é o próprio `:id` (`<pastaDoProjeto>:<sessionId>`), único;
+o `:` vira `_` no nome do arquivo. É chave/valor puro — o serviço **não** interpreta o
+que cada chave significa (isso é da interface), e é por isso que serve para qualquer
+preferência nova sem tocar no serviço.
 
 | Método | Rota | O quê |
 | --- | --- | --- |
+| GET | `/api/settings` | lê a configuração global (`{ settings }`) |
+| PUT | `/api/settings` | mescla e grava a global (body: objeto chave/valor) |
 | GET | `/api/settings/:id` | lê a configuração da conversa (`{ id, settings }`) |
 | PUT | `/api/settings/:id` | mescla e grava (body: objeto chave/valor) |
 | DELETE | `/api/settings/:id` | apaga a config da conversa; devolve `{ id, settings }` (o que existia) |
+
+```bash
+curl -s localhost:7788/api/settings
+# { "settings": { "trashRetentionValue": 30, "trashRetentionUnit": "days" } }
+
+curl -s -X PUT localhost:7788/api/settings \
+  -H 'content-type: application/json' -d '{"trashRetentionValue":6,"trashRetentionUnit":"months"}'
+```
+
+> Sem `:id` é a global; com `:id` é a da conversa. Não há ambiguidade: o router monta
+> `^/api/settings/?$` para uma e `^/api/settings/([^/]+)/?$` para a outra, e o segmento
+> exige ao menos um caractere.
+
+Chaves globais em uso pela interface: `trashRetentionValue` (inteiro) e
+`trashRetentionUnit` (`days` | `months` | `years`) — a retenção que o painel Lixeira
+manda para o `POST /trash/purge`. Se nunca configurada, o painel assume **30 dias**.
 
 ```bash
 ID='-home-fernando:57316179-7a65-49bc-940d-ce557e574dfa'
@@ -245,6 +299,11 @@ curl -s -X PUT "localhost:7788/api/settings/$(...)" \
 ```
 
 - **semântica PATCH:** o `PUT` mescla — mande só a chave que mudou;
+- **gravação atômica e serializada:** o arquivo é escrito num `.tmp` e renomeado, e as
+  gravações do mesmo arquivo entram numa fila. Dois `PUT` ao mesmo tempo (dois campos
+  editados em sequência na interface) antes disso truncavam e escreviam um por cima do
+  outro: o JSON saía partido e o `GET` seguinte devolvia `{}`, como se a config tivesse
+  sido apagada. Arquivo ilegível agora também gera aviso no console do servidor;
 - **voltar ao padrão:** valor `""` ou `null` **remove** a chave (`{"color":""}` apaga a cor);
 - chaves são curtas e alfanuméricas (`^[a-zA-Z0-9_-]{1,40}$`); valores só
   texto/número/booleano; o arquivo tem teto de 16 KB — id ou chave inválidos dão 400;

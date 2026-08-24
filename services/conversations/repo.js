@@ -318,3 +318,53 @@ export async function restoreFromTrash(name) {
   await fs.rename(src, dest);
   return { restored: `${projectDir}:${sessionId}`, path: dest };
 }
+
+/* ------------------------------------------------------- expurgo da lixeira */
+
+// Recuo em calendário de verdade: 1 mês é "o mesmo dia do mês anterior", não 30
+// dias. Quem chama manda a unidade; este serviço não sabe onde ela foi guardada.
+const UNIT_BACK = {
+  days: (d, n) => d.setDate(d.getDate() - n),
+  months: (d, n) => d.setMonth(d.getMonth() - n),
+  years: (d, n) => d.setFullYear(d.getFullYear() - n),
+};
+
+export const RETENTION_UNITS = Object.keys(UNIT_BACK);
+const MAX_VALUE = 999;
+
+/** Instante a partir do qual o item é considerado antigo (mais velho = expurgável). */
+function cutoffFrom(value, unit) {
+  const n = Number(value);
+  if (!Number.isInteger(n) || n < 1 || n > MAX_VALUE) {
+    throw badRequest(`quantidade inválida: use um inteiro de 1 a ${MAX_VALUE}`);
+  }
+  const back = UNIT_BACK[unit];
+  if (!back) throw badRequest(`unidade inválida: "${unit}" (use ${RETENTION_UNITS.join(', ')})`);
+  const cutoff = new Date();
+  back(cutoff, n);
+  return cutoff;
+}
+
+/**
+ * Apaga DE VERDADE (sem volta) os itens da lixeira deletados antes do corte.
+ * Com `dryRun`, só diz o que iria embora — é assim que a interface confirma antes.
+ * A idade sai do `deletedAt` do `listTrash()`, então lista e expurgo concordam.
+ */
+export async function purgeTrash({ value, unit, dryRun = false } = {}) {
+  const cutoff = cutoffFrom(value, unit);
+  const doomed = (await listTrash()).filter((t) => t.deletedAt < cutoff.toISOString());
+  const bytes = doomed.reduce((sum, t) => sum + t.bytes, 0);
+
+  if (!dryRun) {
+    for (const t of doomed) await fs.rm(path.join(config.trashDir, t.name), { force: true });
+  }
+
+  return {
+    dryRun,
+    cutoff: cutoff.toISOString(),
+    retention: { value: Number(value), unit },
+    count: doomed.length,
+    bytes,
+    items: doomed.map((t) => ({ name: t.name, projectDir: t.projectDir, deletedAt: t.deletedAt, bytes: t.bytes })),
+  };
+}

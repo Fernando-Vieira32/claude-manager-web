@@ -30,9 +30,13 @@ services/
   fs/service.js
   fs/repo.js             navegação de pastas (escolher onde a conversa roda)
   settings/service.js
-  settings/repo.js       preferências por conversa (chave/valor) gravadas em arquivo
+  settings/repo.js       preferências chave/valor: global e por conversa, em arquivo
 data/
+  settings.json          config global do app (1 arquivo); criado sozinho, fora do git
   conversas/             1 arquivo JSON por conversa (config); criado sozinho, fora do git
+test/
+  *.test.js              suíte do `node --test` (npm test) — sem dependências
+  helpers/sandbox.js     pastas temporárias + factories; isola os testes do seu disco
 public/
   index.html             casca: sidebar, topbar, drawer, modal, toasts
                          (as janelas de conversa nascem soltas no <body>)
@@ -79,10 +83,10 @@ Log do boot:
 
 ```
 [registry] serviço "chat" em /api/chat (6 rotas)
-[registry] serviço "conversations" em /api/conversations (6 rotas)
+[registry] serviço "conversations" em /api/conversations (7 rotas)
 [registry] serviço "fs" em /api/fs (1 rotas)
 [registry] serviço "sessions" em /api/sessions (2 rotas)
-[registry] serviço "settings" em /api/settings (2 rotas)
+[registry] serviço "settings" em /api/settings (5 rotas)
 ```
 
 Se um serviço não aparecer nessa lista, ele não foi carregado — confira o nome do

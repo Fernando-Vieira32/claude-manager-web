@@ -132,4 +132,21 @@ parâmetro, senão `/:id` engole tudo:
 - **Comandos externos**: prefira `execFile` (como em `sessions/repo.js`) a `exec` —
   sem shell, sem interpolação, sem injeção.
 
+## Teste o `repo.js`
+
+A regra de negócio mora no `repo.js`, e é ela que dá para testar sem navegador e sem
+subir servidor. O sandbox aponta `CLAUDE_CONFIG_DIR`/`DATA_DIR` para uma pasta
+temporária, então o teste pode até apagar arquivo de verdade sem risco:
+
+```js
+before(async () => {
+  box = await createSandbox();                  // troca o env ANTES do import
+  repo = await import('../services/x/repo.js'); // por isso é import dinâmico
+});
+```
+
+Cubra pelo menos: o caminho felizmente comum, cada `badRequest` que você lançou, e o
+que acontece quando o arquivo/pasta não existe. Detalhes e a tradução RSpec →
+`node:test` em [13 · Testes](13-testes.md).
+
 Próximo passo: [criar o painel que consome esse serviço](05-painel-novo.md).

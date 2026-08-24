@@ -5,6 +5,7 @@ import {
   renameConversation,
   listTrash,
   restoreFromTrash,
+  purgeTrash,
 } from './repo.js';
 
 export default {
@@ -30,6 +31,12 @@ export default {
       path: '/trash/restore',
       summary: 'restaura da lixeira (body: { name })',
       handler: async ({ body }) => restoreFromTrash(body.name),
+    },
+    {
+      method: 'POST',
+      path: '/trash/purge',
+      summary: 'apaga da lixeira o que é mais velho que a retenção (body: { value, unit, dryRun })',
+      handler: async ({ body }) => purgeTrash(body),
     },
     {
       method: 'GET',

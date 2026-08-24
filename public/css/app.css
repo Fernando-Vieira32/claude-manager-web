@@ -453,6 +453,13 @@ table.grid tr:hover td { background: var(--surface); }
 }
 .setup-input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
 .choice-field { display: inline-flex; align-items: center; gap: 8px; }
+
+/* ------------------------------- componente duration-field (número + unidade) */
+.duration-field { display: inline-flex; align-items: center; gap: 8px; }
+.duration-num { width: 68px; text-align: right; }
+
+/* painel Lixeira: os controles de expurgo encostam na direita da barra */
+.trash-purge { display: inline-flex; align-items: center; gap: 10px; margin-left: auto; }
 .choice-help {
   position: relative; flex: none;
   display: inline-grid; place-items: center;

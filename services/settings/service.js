@@ -1,11 +1,29 @@
-import { getSettings, saveSettings, deleteSettings } from './repo.js';
+import {
+  getSettings,
+  saveSettings,
+  deleteSettings,
+  getGlobalSettings,
+  saveGlobalSettings,
+} from './repo.js';
 
 export default {
   id: 'settings',
   title: 'Configurações',
-  description: 'Preferências por conversa (modo, cor…), gravadas em data/conversas/',
+  description: 'Preferências chave/valor: globais (data/settings.json) e por conversa (data/conversas/)',
   basePath: '/api/settings',
   routes: [
+    {
+      method: 'GET',
+      path: '/',
+      summary: 'lê a configuração global do app (objeto chave/valor)',
+      handler: () => getGlobalSettings(),
+    },
+    {
+      method: 'PUT',
+      path: '/',
+      summary: 'mescla e grava a configuração global (body: objeto chave/valor; valor "" remove a chave)',
+      handler: ({ body }) => saveGlobalSettings(body),
+    },
     {
       method: 'GET',
       path: '/:id',
