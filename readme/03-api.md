@@ -361,7 +361,8 @@ curl -s -X PUT "localhost:7788/api/settings/$(...)" \
 - **voltar ao padrão:** valor `""` ou `null` **remove** a chave (`{"color":""}` apaga a cor);
 - chaves são curtas e alfanuméricas (`^[a-zA-Z0-9_-]{1,40}$`); valores só
   texto/número/booleano; o arquivo tem teto de 16 KB — id ou chave inválidos dão 400;
-- hoje a interface usa `mode` (modo do chat) e `color` (cor da janela), mas o formato
+- hoje a interface usa `mode` (modo do chat), `model` (modelo escolhido para os
+  próximos envios) e `color` (cor da janela), mas o formato
   é genérico: dá para acrescentar chaves sem mexer no serviço.
 
 **Limpeza ao deletar.** Quando uma conversa vai para a lixeira, o painel também chama

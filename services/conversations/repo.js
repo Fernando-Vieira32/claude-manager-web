@@ -57,6 +57,7 @@ async function summarize(file, projectDir, stat) {
   const entries = await parseFile(file);
   let cwd = '';
   let title = '';
+  let primeiraFala = '';   // 1a fala do usuario, marcada como humana ou nao
   let name = '';
   let messages = 0;
   let firstTs = null;
@@ -78,9 +79,16 @@ async function summarize(file, projectDir, stat) {
     }
     // o tamanho do contexto é o que o último turno do assistant carregou
     if (e.type === 'assistant' && e.message?.usage) lastUsage = e.message.usage;
-    if (!title && e.type === 'user' && e.origin?.kind === 'human') {
+    // Título = primeira fala do usuário. Preferimos a marcada como humana; se não
+    // houver nenhuma, usamos a primeira fala mesmo assim. Mensagem enviada pelo
+    // navegador vai pelo CLI headless, que NÃO grava `origin.kind` — sem esse
+    // fallback, TODA conversa criada por este app aparecia como "(sem texto)".
+    if (e.type === 'user') {
       const t = textOf(e.message?.content).replace(/\s+/g, ' ').trim();
-      if (!isNoise(t)) title = t.slice(0, 160);
+      if (!isNoise(t)) {
+        if (!primeiraFala) primeiraFala = t.slice(0, 160);
+        if (!title && e.origin?.kind === 'human') title = t.slice(0, 160);
+      }
     }
   }
 
@@ -93,7 +101,7 @@ async function summarize(file, projectDir, stat) {
     projectLabel: path.basename(label),
     projectDir,
     name: name || null,
-    title: title || '(sem texto)',
+    title: title || primeiraFala || '(sem texto)',
     messages,
     bytes: stat.size,
     modifiedAt: new Date(stat.mtimeMs).toISOString(),

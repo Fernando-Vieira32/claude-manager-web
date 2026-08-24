@@ -168,6 +168,48 @@ describe('ferramentas no histórico', () => {
   });
 });
 
+describe('título da conversa na lista', () => {
+  const meta = async (id) => (await repo.getConversation(id, { limit: 1 })).meta;
+
+  it('usa a fala marcada como humana quando existe', async () => {
+    const id = await givenTranscript(fala('pergunta do terminal'));
+
+    assert.equal((await meta(id)).title, 'pergunta do terminal');
+  });
+
+  it('cai na primeira fala mesmo sem origin.kind — é o caso do chat pelo navegador', async () => {
+    // o CLI headless (claude -p) não grava origin.kind; sem fallback, toda conversa
+    // criada por este app aparecia como "(sem texto)" na lista
+    const id = await givenTranscript({ type: 'user', message: { content: [{ type: 'text', text: 'mensagem do navegador' }] } });
+
+    assert.equal((await meta(id)).title, 'mensagem do navegador');
+  });
+
+  it('a fala humana ganha da não marcada, mesmo vindo depois', async () => {
+    const id = await givenTranscript(
+      { type: 'user', message: { content: [{ type: 'text', text: 'injetada' }] } },
+      fala('a que a pessoa escreveu'),
+    );
+
+    assert.equal((await meta(id)).title, 'a que a pessoa escreveu');
+  });
+
+  it('sem fala nenhuma continua "(sem texto)"', async () => {
+    const id = await givenTranscript({ type: 'assistant', message: { content: [{ type: 'text', text: 'oi' }] } });
+
+    assert.equal((await meta(id)).title, '(sem texto)');
+  });
+
+  it('ignora ruído (<system-reminder>, Caveat:)', async () => {
+    const id = await givenTranscript(
+      { type: 'user', message: { content: [{ type: 'text', text: '<system-reminder>algo</system-reminder>' }] } },
+      { type: 'user', message: { content: [{ type: 'text', text: 'a real' }] } },
+    );
+
+    assert.equal((await meta(id)).title, 'a real');
+  });
+});
+
 describe('texto continua funcionando', () => {
   it('mensagem de texto puro não ganha tools', async () => {
     const id = await givenTranscript(fala('bom dia'), { type: 'assistant', message: { content: [{ type: 'text', text: 'bom dia!' }] } });

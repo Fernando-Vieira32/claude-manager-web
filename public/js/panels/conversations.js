@@ -5,12 +5,9 @@
 import { api } from '../core/api.js';
 import { el, fmt, toast, confirmAction, states } from '../core/ui.js';
 import { createDataTable } from '../components/data-table.js';
-import { createChat } from '../components/chat.js';
-import { createContextMeter } from '../components/context-meter.js';
 import { createInlineEdit } from '../components/inline-edit.js';
-import { createFloatingWindow } from '../components/floating-window.js';
-import { createColorPicker } from '../components/color-picker.js';
-import { MODE_CHOICES } from '../core/chat-fields.js';
+import { createConversationWindow, openConversationWindow } from '../components/conversation-window.js';
+import { MODE_CHOICES, MODEL_CHOICES } from '../core/chat-fields.js';
 
 // Amostras da paleta da janela — as mesmas cores vivas dos tokens do tema.
 const WINDOW_COLORS = ['#ff6a45', '#ff4f8b', '#a855f7', '#3b82f6', '#06b6d4', '#17c964', '#ffb020', '#f43f5e'];
@@ -24,11 +21,11 @@ const colorsOf = (items) => new Map(items
   .filter((s) => HEX.test(s.settings?.color || ''))
   .map((s) => [s.id, s.settings.color]));
 
-// Estado FORA do ciclo do painel: as janelas de conversa vivem soltas na tela
-// (no <body>) e sobrevivem à navegação entre menus. `refreshList` aponta para o
-// `load()` do painel montado no momento (ou null se não estamos em Conversas), pra
-// uma resposta atualizar a lista só quando ela está visível.
-const openWindows = new Map(); // id da conversa -> { win, chat, meter }
+// Estado FORA do ciclo do painel: as janelas de conversa vivem soltas na tela (no
+// <body>) e sobrevivem à navegação entre menus — quem guarda quais estão abertas é
+// o `conversation-window`. `refreshList` aponta para o `load()` do painel montado
+// no momento (ou null se não estamos em Conversas), pra uma resposta atualizar a
+// lista só quando ela está visível.
 const opening = new Set();      // ids abrindo agora (evita 2 janelas num clique-duplo)
 let refreshList = null;
 
@@ -140,82 +137,56 @@ export default {
     // e arrastar, e mexer no resto da página. Fechar a janela NÃO mata o processo
     // (a resposta em andamento termina em segundo plano) — matar é em Sessões.
     async function open(c) {
-      const already = openWindows.get(c.id);
-      if (already) { already.win.focus(); already.chat.composer.focus(); return; }
+      const aberta = openConversationWindow(c.id);
+      if (aberta) { aberta.focus(); return; }
       if (opening.has(c.id)) return;   // já tem um open() desta conversa em andamento
       opening.add(c.id);
 
-      // preferências gravadas desta conversa (modo, cor…) — sobrevivem a fechar/reabrir.
-      // Falha aqui não impede abrir a conversa: só cai no padrão.
+      // preferências gravadas desta conversa (modo, cor, modelo) — sobrevivem a
+      // fechar/reabrir. Falha aqui não impede abrir: só cai no padrão.
       const saved = await api.settings.get(c.id)
         .then((r) => r.settings || {})
         .catch(() => ({}))
         .finally(() => opening.delete(c.id));
-      const saveSetting = (patch) => api.settings.save(c.id, patch)
-        .catch((err) => toast(`Não deu para salvar a configuração: ${err.message}`, { type: 'err' }));
 
-      const meter = createContextMeter({ onCompact: () => compact(c, meter, chat) });
-      meter.set({ tokens: c.contextTokens, window: c.contextWindow, note: c.contextNote });
-
-      let win;
-      const chat = createChat({
-        pageSize: 20,
+      const janela = createConversationWindow({
+        id: c.id,
+        title: c.name || c.title,
+        project: c.project,
+        bytes: c.bytes,
+        model: c.model,
+        context: { tokens: c.contextTokens, window: c.contextWindow, note: c.contextNote },
+        settings: saved,
+        modeChoices: MODE_CHOICES,
+        modelChoices: MODEL_CHOICES,
+        swatches: WINDOW_COLORS,
         fetchPage: (opts) => api.conversations.read(c.id, opts),
         send: (text, values, images, onEvent, signal) =>
-          api.chat.send(c.id, { text, mode: values.mode, images }, onEvent, signal),
-        onStop: () => api.chat.stop(c.id),
-        fields: [{
-          name: 'mode', label: 'modo', value: saved.mode || 'none', choices: MODE_CHOICES,
-          onChange: (mode) => saveSetting({ mode }),   // grava assim que troca, mesmo sem enviar
-        }],
-        onState: ({ shown, total }) =>
-          win?.setSubtitle(`${c.project} · ${shown} de ${total} mensagens · ${fmt.bytes(c.bytes)}`),
-        onFinish: () => {
-          chat.reload().catch(() => {});
-          refreshMeter(c, meter);
+          api.chat.send(c.id, { text, mode: values.mode, model: values.model, images }, onEvent, signal),
+        stop: () => api.chat.stop(c.id),
+        onSaveSetting: (patch) => api.settings.save(c.id, patch)
+          // só a cor aparece na lista; não vale redesenhar 60 linhas por trocar de modo
+          .then(() => { if ('color' in patch) refreshList?.(); })
+          .catch((err) => toast(`Não deu para salvar a configuração: ${err.message}`, { type: 'err' })),
+        onCompact: (j) => compact(c, j.meter, j.chat),
+        onFinish: (j) => {
+          j.chat.reload().catch(() => {});
+          refreshMeter(c, j.meter);
           refreshList?.();   // atualiza a lista só se Conversas estiver aberto
         },
       });
 
-      // seletor de cor no cabeçalho da janela: troca a cor E grava na hora
-      const colorPicker = createColorPicker({
-        value: saved.color || '',
-        swatches: WINDOW_COLORS,
-        // troca a cor da janela, grava, e repinta a linha na lista (se estiver aberta)
-        onChange: (color) => {
-          win?.setAccent(color);
-          saveSetting({ color }).then(() => refreshList?.());
-        },
-      });
-
-      win = createFloatingWindow({
-        title: (c.name || c.title).slice(0, 70),
-        subtitle: `${c.project} · carregando…`,
-        actions: [colorPicker.node],
-        onClose: () => {
-          openWindows.delete(c.id);
-          chat.destroy({ abort: false }); // fechar não interrompe a resposta
-          meter.destroy();
-          colorPicker.destroy();
-        },
-      });
-      win.setAccent(saved.color || '');   // aplica a cor salva ao abrir
-      win.bodyEl.append(chat.node);
-      win.setFooter([meter.node, chat.footer]);
-      openWindows.set(c.id, { win, chat, meter });
-
-      chat.attach(win.scroller());
       try {
-        await chat.start();
+        await janela.chat.start();
       } catch (err) {
-        win.setTitle('Erro ao ler a conversa');
-        win.setSubtitle(c.sessionId);
-        win.bodyEl.replaceChildren(states.error(err, () => { win.close(); open(c); }));
-        win.setFooter(null);
+        janela.win.setTitle('Erro ao ler a conversa');
+        janela.win.setSubtitle(c.sessionId);
+        janela.win.bodyEl.replaceChildren(states.error(err, () => { janela.win.close(); open(c); }));
+        janela.win.setFooter(null);
         return;
       }
-      chat.composer.focus();
-      warnIfBusy(c, chat);
+      janela.focus();
+      warnIfBusy(c, janela.chat);
     }
 
     /** Avisa se um terminal parece estar com esta conversa aberta. */

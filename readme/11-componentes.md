@@ -18,6 +18,7 @@ public/js/components/
   bubble.js       bolha de mensagem estática e bolha de streaming
   composer.js     caixa de escrever com campos de opção e enviar/parar
   chat.js         feed + composer + protocolo de stream = vista de conversa
+  conversation-window.js  a janela de uma conversa (floating-window + chat + medidor + cor)
   data-table.js   tabela declarativa por colunas
   activity.js     indicador vivo "algo está acontecendo" (pulso + tempo + barra)
   context-meter.js  barra de uso de contexto + botão compactar
@@ -141,12 +142,61 @@ const chat = createChat({
 drawer.open({ body: chat.node, footer: chat.footer, onClose: () => chat.destroy() });
 chat.attach(drawer.scroller());
 await chat.start();
+chat.submit('primeira mensagem', images);   // envia por código, com os campos atuais
 chat.notice('esta conversa está aberta num terminal');
 ```
 
 O transporte é injetado: qualquer serviço que emita os eventos do contrato
-(`init`, `delta`, `message`, `tool`, `notice`, `result`, `error`, `done`) reaproveita
-esta vista inteira. `mountChat(container, chat)` monta fora do drawer.
+(`init`, `delta`, `message`, `tool`, `toolResult`, `notice`, `result`, `error`, `done`)
+reaproveita esta vista inteira. `mountChat(container, chat)` monta fora do drawer.
+
+`submit(text, images)` envia por código pelo **mesmo** caminho do clique em "Enviar" (é
+o que as respostas rápidas já usavam por dentro). Serve para abrir a vista já com a
+primeira mensagem em mão — é assim que a tela de nova conversa manda a primeira.
+
+## `conversation-window.js`
+
+A vista completa de "estar dentro de uma conversa": compõe
+[`floating-window`](#floating-windowjs) + [`chat`](#chatjs) +
+[`context-meter`](#context-meterjs) + [`color-picker`](#color-pickerjs).
+
+Existe porque **dois caminhos abrem a mesma coisa**: clicar em "Ler" na lista e iniciar
+uma conversa nova. Painel não importa painel, então a peça compartilhada é componente e
+cada painel compõe.
+
+```js
+const janela = createConversationWindow({
+  id: c.id, title: c.name || c.title, project: c.project, bytes: c.bytes, model: c.model,
+  context: { tokens, window, note },          // estado inicial do medidor
+  settings: salvas,                            // { mode, model, color } do disco
+  modeChoices: MODE_CHOICES, modelChoices: MODEL_CHOICES, swatches: CORES,
+  fetchPage: (opts) => api.conversations.read(c.id, opts),
+  send: (text, values, images, onEvent, signal) =>
+    api.chat.send(c.id, { text, mode: values.mode, model: values.model, images }, onEvent, signal),
+  stop: () => api.chat.stop(c.id),
+  onSaveSetting: (patch) => api.settings.save(c.id, patch),
+  onCompact: (j) => compactar(j.meter, j.chat),
+  onFinish: (j) => j.chat.reload(),
+});
+await janela.chat.start();
+janela.focus();
+```
+
+Devolve `{ id, win, chat, meter, setId, setTitle, setHeader, focus, destroy }`.
+
+Três coisas que valem saber:
+
+- **uma janela por conversa.** O registro vive no módulo do componente, não no painel:
+  `createConversationWindow` com um `id` já aberto **foca a existente** em vez de criar
+  outra. `openConversationWindow(id)` responde se já existe. Se o registro ficasse no
+  painel, abrir por um caminho e depois pelo outro daria duas janelas da mesma conversa;
+- **`setId(id)`** existe para a conversa que ainda vai nascer: quem inicia só descobre o
+  id no evento `init`, e é esse registro que impede a segunda janela depois;
+- **`setHeader({ … })` mescla.** O total de mensagens chega pelo feed e o modelo pode só
+  ser conhecido depois; atualizar um não apaga o outro.
+
+O `/compact` **não** vem embutido: entra como `onCompact`, porque quem mostra toast e
+mede o antes→depois é o painel. O componente não conhece `api.js`.
 
 ## `data-table.js`
 

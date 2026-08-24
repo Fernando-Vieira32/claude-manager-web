@@ -146,25 +146,37 @@ arquivo porque vários componentes usam `display: grid/flex` — sem isso o atri
 
 | Painel | Arquivo | Particularidades |
 | --- | --- | --- |
-| Nova conversa | `panels/new-conversation.js` | tela inicial; barra de modelo/pasta/modo + `chat`; inicia a conversa (`api.chat.start`) e depois continua |
+| Nova conversa | `panels/new-conversation.js` | **lançador**: barra de modelo/pasta/modo + `composer`; ao enviar a primeira mensagem a conversa **abre numa janela** ([`conversation-window`](11-componentes.md#conversation-windowjs)) — a mesma de "Ler" |
 | Sessões | `panels/sessions.js` | auto-refresh de 5s com `destroy()` limpando o timer; SIGTERM → oferta de SIGKILL no toast |
-| Conversas | `panels/conversations.js` | compõe `data-table` + `chat` + `context-meter` + `inline-edit` (renomear) + `color-picker`; abre em janelas flutuantes (várias, não-modais) com modo/cor salvos por conversa; **a linha da lista aparece na cor configurada** (faixa + tinta, via `rowClass`/`rowStyle` — ver [11](11-componentes.md#destacar-uma-linha)); deletar com "Desfazer" |
+| Conversas | `panels/conversations.js` | compõe `data-table` + `inline-edit` (renomear) + [`conversation-window`](11-componentes.md#conversation-windowjs); **a linha da lista aparece na cor configurada** (faixa + tinta, via `rowClass`/`rowStyle` — ver [11](11-componentes.md#destacar-uma-linha)); deletar com "Desfazer" |
 | Lixeira | `panels/trash.js` | filtro local (a lista é pequena), restauração e expurgo por idade ([`duration-field`](11-componentes.md#duration-fieldjs) + retenção na config global) |
 | Serviços | `panels/services.js` | desenha `/api/_services`: documentação que não desatualiza |
 
 ## Leitor e chat de conversas
 
 Cada conversa abre numa [janela flutuante](11-componentes.md#floating-windowjs)
-(arrastável, redimensionável, não-modal — dá para abrir várias) que compõe
-`data-table` → `chat` (`feed` + `composer`): abre com as 20 últimas mensagens roladas
-até o fim, libera as anteriores ao subir e tem a caixa de escrever no rodapé fixo.
-Fechar a janela não interrompe uma resposta em curso (ela termina em segundo plano).
-Contratos em [11 · Componentes](11-componentes.md); o servidor em [10 · Chat](10-chat.md).
+(arrastável, redimensionável, não-modal — dá para abrir várias) montada pelo
+[`conversation-window`](11-componentes.md#conversation-windowjs): abre com as 20 últimas
+mensagens roladas até o fim, libera as anteriores ao subir e tem a caixa de escrever no
+rodapé fixo. Fechar a janela não interrompe uma resposta em curso (ela termina em
+segundo plano). Contratos em [11 · Componentes](11-componentes.md); o servidor em
+[10 · Chat](10-chat.md).
+
+**Os dois caminhos abrem a MESMA janela.** Clicar em "Ler" na lista e iniciar uma
+conversa nova compõem o mesmo componente — e ele guarda quais estão abertas, então
+começar uma conversa e depois clicar em "Ler" nela **foca a janela existente** em vez de
+abrir uma segunda. Antes a conversa nova ficava embutida no painel: outro lugar, outra
+aparência, e ela saía de vista ao trocar de aba.
+
+**No cabeçalho:** `projeto · N de M mensagens · tamanho · modelo`. O modelo ali é o que
+**respondeu de fato** (vem do transcript); o seletor de modelo no rodapé é o que vale
+para o **próximo** envio — os dois podem divergir, e é por isso que aparecem separados.
 
 **Preferências por conversa (salvas em arquivo).** Cada conversa lembra o **modo** do
-chat (só conversa/plano/…) e uma **cor** para a janela — não se perde ao fechar e
-reabrir. O modo grava assim que você troca; a cor sai do seletor 🎨 no cabeçalho da
-janela (amostras + cor livre; "Padrão" remove). Tudo vai para um arquivo por conversa
+chat (só conversa/plano/…), o **modelo** e uma **cor** para a janela — não se perde ao
+fechar e reabrir. Modo e modelo gravam assim que você troca, mesmo sem enviar; a cor sai
+do seletor 🎨 no cabeçalho da janela (amostras + cor livre; "Padrão" remove). Tudo vai
+para um arquivo por conversa
 em `data/conversas/` (dentro do projeto, ignorado no git), pelo serviço
 [`settings`](03-api.md#configurações-settings) — o vínculo arquivo ↔ conversa é o `:id`
 único da conversa. É chave/valor, então dá para lembrar mais coisas no futuro sem mexer

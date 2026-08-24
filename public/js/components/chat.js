@@ -211,6 +211,13 @@ export function createChat({
     start() { return feed.loadFirst(); },
     reload() { return feed.loadFirst(); },
 
+    /**
+     * Envia um texto por código, com os valores atuais dos campos — o mesmo
+     * caminho do clique em "Enviar" e das respostas rápidas. Serve para quem abre
+     * a vista já com uma primeira mensagem (e imagens) em mão.
+     */
+    submit(text, images = []) { return run(text, composer.values(), images); },
+
     /** Aviso acima da caixa de escrever (ex.: conversa aberta num terminal). */
     notice(text, kind) { composer.setNotice(text, kind); return this; },
 

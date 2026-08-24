@@ -1,6 +1,11 @@
-// Painel "Nova conversa" — a tela inicial. Só COMPÕE: reaproveita createChat
-// (feed + composer + streaming + indicador de atividade) e acrescenta uma barra
-// de configuração — modelo (digitável), pasta (com navegador) e modo.
+// Painel "Nova conversa" — a tela inicial. É um LANÇADOR: escolha modelo, pasta e
+// modo, escreva a primeira mensagem, e a conversa abre na mesma janela flutuante
+// de quando você clica em "Ler" na lista.
+//
+// Antes a conversa nascia e ficava embutida neste painel: dois lugares diferentes
+// para a mesma coisa, e você perdia a conversa de vista ao trocar de aba. Hoje os
+// dois caminhos compõem o mesmo `conversation-window` — painel não importa painel,
+// a peça compartilhada é componente.
 //
 // A única lógica daqui é o "criar-ou-continuar": a primeira mensagem nasce a
 // conversa (api.chat.start, que gera o session-id no servidor); as seguintes
@@ -8,10 +13,14 @@
 
 import { api } from '../core/api.js';
 import { el, toast } from '../core/ui.js';
-import { createChat } from '../components/chat.js';
+import { createComposer } from '../components/composer.js';
 import { createChoiceSelect } from '../components/choice-select.js';
 import { createDirField } from '../components/dir-field.js';
+import { createConversationWindow } from '../components/conversation-window.js';
 import { MODE_CHOICES, MODEL_CHOICES } from '../core/chat-fields.js';
+
+// Mesmas amostras da janela de Conversas — a cor é preferência da conversa.
+const WINDOW_COLORS = ['#ff6a45', '#ff4f8b', '#a855f7', '#3b82f6', '#06b6d4', '#17c964', '#ffb020', '#f43f5e'];
 
 /** rótulo + controle, no visual da barra de configuração. */
 function field(label, ...nodes) {
@@ -23,20 +32,17 @@ export default {
   icon: '＋',
   navTitle: 'Nova conversa',
   title: 'Nova conversa',
-  description: 'Comece uma conversa nova com o Claude — escolha o modelo e a pasta',
+  description: 'Comece uma conversa nova com o Claude — ela abre numa janela própria',
   searchPlaceholder: false,
 
-  async mount(root, ctx) {
-    const state = { id: null, cwd: '', named: false };
-    let chat = null;
-
+  async mount(root) {
     // pasta padrão: a mais recente com conversa, senão o HOME do servidor
-    let home = '';
-    try { home = (await api.fs.browse()).path; } catch { /* segue sem HOME */ }
+    let inicial = '';
+    try { inicial = (await api.fs.browse()).path; } catch { /* segue sem HOME */ }
     try {
       const { items } = await api.conversations.list();
-      state.cwd = items.map((c) => c.project).filter(Boolean)[0] || home;
-    } catch { state.cwd = home; }
+      inicial = items.map((c) => c.project).filter(Boolean)[0] || inicial;
+    } catch { /* fica o HOME */ }
 
     /* --- barra de configuração: 3 componentes reutilizáveis, nada inline --- */
     const model = createChoiceSelect({
@@ -44,70 +50,91 @@ export default {
       customLabel: 'versão específica…', customPlaceholder: 'ex.: claude-opus-4-8',
       title: 'alias = última versão; para fixar uma versão use "versão específica…" (ex.: claude-opus-4-8)',
     });
-    const dir = createDirField({
-      browse: api.fs.browse, value: state.cwd, onChange: (d) => { state.cwd = d; },
+    const dir = createDirField({ browse: api.fs.browse, value: inicial });
+    const mode = createChoiceSelect({
+      choices: MODE_CHOICES, value: 'none', title: 'o que o Claude pode fazer nesta conversa',
     });
-    const mode = createChoiceSelect({ choices: MODE_CHOICES, value: 'none', title: 'o que o Claude pode fazer nesta conversa' });
 
     const setup = el('div', { class: 'setup-bar' },
       field('modelo', model.node),
       field('pasta', dir.node),
       field('modo', mode.node));
 
-    /* ------------------------------------------------------------------ chat */
-    chat = createChat({
-      pageSize: 20,
+    /**
+     * Abre a janela da conversa que ainda vai nascer e manda a primeira mensagem
+     * de dentro dela. O `id` é local: cada início é uma conversa diferente, então
+     * dá para lançar várias sem uma atropelar a outra.
+     */
+    async function iniciar(text, images) {
+      const cwd = dir.value();
+      const escolhido = { mode: mode.value(), model: model.value() };
+      let id = null;
+
+      const janela = createConversationWindow({
+        title: text.slice(0, 70),
+        project: cwd,
+        settings: escolhido,
+        modeChoices: MODE_CHOICES,
+        modelChoices: MODEL_CHOICES,
+        swatches: WINDOW_COLORS,
+
+        // enquanto a conversa não existe não há histórico para paginar
+        fetchPage: (opts) => (id
+          ? api.conversations.read(id, opts)
+          : Promise.resolve({ messages: [], total: 0, from: 0, hasMore: false })),
+
+        send: (t, values, imgs, onEvent, signal) => {
+          const opts = { text: t, mode: values.mode, model: values.model, images: imgs };
+          if (id) return api.chat.send(id, opts, onEvent, signal);
+          return api.chat.start({ cwd, ...opts }, (ev) => {
+            if (ev.type === 'init' && ev.conversationId) {
+              id = ev.conversationId;
+              janela.setId(id);          // registra: reabrir pela lista foca esta janela
+            }
+            onEvent(ev);
+          }, signal);
+        },
+
+        stop: () => (id ? api.chat.stop(id) : Promise.resolve()),
+        onSaveSetting: (patch) => (id ? api.settings.save(id, patch) : Promise.resolve())
+          .catch((err) => toast(`Não deu para salvar a configuração: ${err.message}`, { type: 'err' })),
+        // ao terminar, o transcript já existe: dá para dizer no cabeçalho QUAL
+        // modelo respondeu de fato (o do composer é o que vai no próximo envio)
+        onFinish: async (j) => {
+          await j.chat.reload().catch(() => {});
+          if (!id) return;
+          const { meta } = await api.conversations.read(id, { limit: 1 }).catch(() => ({}));
+          if (meta) j.setHeader({ model: meta.model, bytes: meta.bytes });
+        },
+      });
+
+      await janela.chat.start().catch(() => {});   // abre vazia; o feed mostra "início"
+      janela.chat.submit(text, images);
+      toast('Conversa criada — ela abriu numa janela e já aparece em Conversas.', { type: 'ok' });
+    }
+
+    const composer = createComposer({
       placeholder: 'Escreva a primeira mensagem e pressione Enter…  (Shift+Enter quebra linha)',
       submitLabel: 'Iniciar conversa',
-
-      fetchPage: (opts) => (state.id
-        ? api.conversations.read(state.id, opts)
-        : Promise.resolve({ messages: [], total: 0, from: 0, hasMore: false })),
-
-      send: (text, _values, images, onEvent, signal) => {
-        const chosen = model.value();
-        const chosenMode = mode.value();
-        if (state.id) {
-          return api.chat.send(state.id, { text, mode: chosenMode, model: chosen, images }, onEvent, signal);
-        }
-        return api.chat.start({ cwd: dir.value(), text, mode: chosenMode, model: chosen, images }, (ev) => {
-          if (ev.type === 'init' && ev.conversationId) {
-            state.id = ev.conversationId;
-            state.cwd = ev.cwd;
-          }
-          onEvent(ev);
-        }, signal);
-      },
-
-      onStop: () => (state.id ? api.chat.stop(state.id) : Promise.resolve()),
-
-      onFinish: () => {
-        if (!state.id) return;
-        if (!state.named) {
-          state.named = true;
-          chat.composer.setSubmitLabel('Enviar');
-          dir.setDisabled(true);        // a pasta é fixada quando a conversa nasce
-          setup.classList.add('locked');
-          toast('Conversa criada. Ela já aparece em Conversas.', { type: 'ok' });
-        }
-        chat.reload().catch(() => {});
-      },
+      allowImages: true,
+      onSubmit: (text, _values, images) => iniciar(text, images),
     });
 
     const intro = el('div', { class: 'starter-intro' },
       el('strong', {}, 'Comece do zero'),
       el('p', {},
-        'Escolha o modelo e a pasta, escreva a primeira mensagem. Ela nasce como uma '
-        + 'conversa nova do Claude Code (grava em ~/.claude/projects) e passa a aparecer '
-        + 'em Conversas, onde você pode continuar, compactar ou apagar.'));
+        'Escolha o modelo e a pasta, escreva a primeira mensagem. A conversa abre numa '
+        + 'janela própria (a mesma de "Ler"), nasce como conversa do Claude Code '
+        + '(grava em ~/.claude/projects) e passa a aparecer em Conversas.'));
 
-    root.replaceChildren(el('div', { class: 'chat-wrap' }, intro, chat.node, setup, chat.footer));
-    chat.attach(root);
-    chat.composer.focus();
+    root.replaceChildren(el('div', { class: 'chat-wrap' }, intro, setup, composer.node));
+    composer.focus();
 
     return {
-      refresh() { if (state.id) chat.reload().catch(() => {}); },
-      destroy() { chat?.destroy(); chat = null; model.destroy(); dir.destroy(); mode.destroy(); },
+      // o composer não tem destroy: seus listeners são nos próprios nós (inclusive o
+      // `paste`, que o image-tray liga no textarea) e morrem com eles. Os três
+      // controles têm, porque o dir-field/choice-select escutam clique-fora.
+      destroy() { model.destroy(); dir.destroy(); mode.destroy(); },
     };
   },
 };
