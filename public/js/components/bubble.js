@@ -91,8 +91,8 @@ export function streamBubble({ role = 'assistant', who, label = 'pensando…' } 
      * Registra uso de ferramenta. Compõe o `tool-call`, que é clicável e mostra o
      * que foi pedido e o que voltou — inclusive de um subagente.
      */
-    addTool(name, { id, input, inputTruncated, onToggle } = {}) {
-      const call = createToolCall({ name, input, inputTruncated, onToggle });
+    addTool(name, { id, summary, input, inputTruncated, onToggle } = {}) {
+      const call = createToolCall({ name, summary, input, inputTruncated, onToggle });
       if (id) tools.set(id, call);
       pendentes.push(call);
       extras.append(call.node);

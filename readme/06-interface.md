@@ -69,6 +69,13 @@ Criador de elementos: `class`, `html`, `dataset`, qualquer `on*` como listener,
 demais chaves como atributos. Filhos podem ser string, Node, array ou `null`
 (ignorado) — dá para escrever `cond ? el(…) : null` sem `if`.
 
+**Valor `null`/`undefined`/`false` faz a chave ser ignorada — inclusive `class`.** Isso
+importa porque o padrão `class: cond ? 'x' : null` é usado à vontade no projeto: antes a
+checagem existia só no ramo dos atributos, então `class: null` caía em
+`node.className = null` e o DOM gravava a **string "null"** (havia 171 elementos com
+`class="null"` na página). Não quebrava seletor nenhum, mas era sujeira esperando alguém
+definir `.null`.
+
 ```js
 fmt.bytes(61234)   // "60KB"
 fmt.when(iso)      // "agora", "38 min atrás", "2 h atrás", "18/08 12:03"

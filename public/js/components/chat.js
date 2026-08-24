@@ -140,6 +140,7 @@ export function createChat({
         case 'tool':
           bubble.addTool(event.name, {
             id: event.id,
+            summary: event.summary,
             input: event.input,
             inputTruncated: event.inputTruncated,
             // abrir/fechar muda a altura: se o usuário estava no fim, siga no fim

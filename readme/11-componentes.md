@@ -201,11 +201,15 @@ Duas armadilhas que valem lembrar:
 
 Uma chamada de ferramenta dentro de uma mensagem: chip clicável que abre o **pedido**
 e o **resultado**. Genérico — não sabe o nome de nenhuma ferramenta, então serve para
-`Bash`, `Edit` e para um subagente (`Agent`) igualmente.
+`Bash`, `Edit` e para um subagente (`Agent`) igualmente. O `summary` chega **pronto**
+por parâmetro: quem decide o que resume é quem traduziu o stream
+([`core/claude-blocks.js`](10-chat.md#ferramentas-e-subagentes-o-que-dá-para-ver)), não
+o componente — ele não sabe que existe uma ferramenta chamada "Agent".
 
 ```js
 const call = createToolCall({
   name: 'Agent',
+  summary: 'Explore · Recon do login',   // frase curta no chip (já vem pronta)
   input: '{ "subagent_type": "Explore", "prompt": "…" }',   // já em texto
   inputTruncated: true,                                     // avisa que cortou
   onToggle: () => feed.scrollToEnd(),                       // abrir muda a altura

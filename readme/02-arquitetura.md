@@ -25,9 +25,11 @@ services/
   sessions/service.js    MANIFESTO (id, basePath, routes)
   sessions/repo.js       regra de negócio: ps, /proc, kill
   conversations/service.js
-  conversations/repo.js  leitura dos .jsonl, lixeira, restore, renomear
+  conversations/repo.js  leitura dos .jsonl: listar, ler em janelas, renomear, deletar
+  conversations/trash.js a lixeira: listar, restaurar, expurgar por idade
   chat/service.js
   chat/repo.js           inicia/continua a conversa via CLI headless (SSE), imagens
+  chat/stream.js         traduz o stream-json do CLI nos eventos do contrato
   fs/service.js
   fs/repo.js             navegação de pastas (escolher onde a conversa roda)
   settings/service.js

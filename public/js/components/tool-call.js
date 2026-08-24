@@ -23,14 +23,17 @@ const VAZIO = '(vazio)';
  * @param {boolean} [opts.open] começa aberto
  * @param {(open:boolean) => void} [opts.onToggle] avisa quem precisa reajustar scroll
  */
-export function createToolCall({ name, input = '', inputTruncated = false, open = false, onToggle } = {}) {
+export function createToolCall({ name, summary = '', input = '', inputTruncated = false, open = false, onToggle } = {}) {
   const caret = el('span', { class: 'tool-caret' }, '▸');
   const chip = el('button', {
     class: 'chip tool-chip',
     type: 'button',
     'aria-expanded': String(open),
-    title: 'ver o que foi pedido e o que voltou',
-  }, caret, `⚙ ${name}`);
+    title: summary ? `${name}: ${summary}` : 'ver o que foi pedido e o que voltou',
+  }, caret, `⚙ ${name}`,
+    // resumo já vem pronto de quem traduziu o stream: o componente não sabe o que
+    // é "Agent" nem quais campos existem — só mostra o texto que recebeu
+    summary ? el('span', { class: 'tool-summary' }, summary) : null);
 
   const saida = el('pre', { class: 'tool-out' }, 'executando…');
   const detalhe = el('div', { class: 'tool-detail' },

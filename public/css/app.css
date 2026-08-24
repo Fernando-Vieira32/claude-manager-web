@@ -351,6 +351,11 @@ table.grid tr.accent td:first-child { box-shadow: inset 3px 0 0 var(--row-accent
 .tool-chip:hover { background: var(--surface); color: var(--text); }
 .tool-chip.err { background: var(--danger-soft); color: var(--danger); }
 .tool-caret { color: var(--text-faint); }
+/* resumo no chip: identifica a chamada sem abrir; corta com … se não couber */
+.tool-summary {
+  color: var(--text-faint); max-width: 46ch;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
 .tool-detail {
   display: grid; gap: 8px; min-width: 0;
   padding: 8px 10px; border-radius: var(--radius-sm);

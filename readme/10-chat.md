@@ -132,7 +132,7 @@ data: {"type":"done","code":0}
 | `system` | `model` | modelo escolhido |
 | `delta` | `text` | pedaço de texto (streaming) |
 | `message` | `text` | bloco de texto completo |
-| `tool` | `id`, `name`, `input`, `inputTruncated` | **chamou** uma ferramenta (`input` já em texto) |
+| `tool` | `id`, `name`, `summary`, `input`, `inputTruncated` | **chamou** uma ferramenta (`input` já em texto) |
 | `toolResult` | `id`, `text`, `truncated`, `isError` | o que a ferramenta **devolveu** |
 | `compact` | `ok`, `message` | resultado da compactação (só no `/compact`) |
 | `notice` | `message` | stderr, aviso de limite de uso |
@@ -146,6 +146,15 @@ O chip de cada ferramenta é clicável ([`tool-call`](11-componentes.md#tool-cal
 abre o **pedido** e o **resultado**. Vale para qualquer ferramenta — `Bash`, `Edit` — e
 também para subagente, que no stream é a ferramenta **`Agent`**, com
 `subagent_type`, `description` e `prompt` dentro do `input`.
+
+O chip também traz um **resumo** ao lado do nome, para identificar a chamada sem abrir:
+`⚙ Agent · Explore · Recon do login`, `⚙ Bash · git status`, `⚙ Edit · core/ui.js`. Quem
+monta é o `summaryOf()` do `core/claude-blocks.js`, e ele é **genérico**: escolhe o
+primeiro campo útil do `input` (`description`, `command`, `pattern`, `query`, `url`,
+`file_path`, `path`, `name`), com `subagent_type` na frente quando existe. Campo de
+caminho mostra as duas últimas partes (o nome do arquivo é o que identifica); nos outros
+o corte vai no fim, porque ali quem identifica é o começo (`git status …`). Ferramenta
+nova que use um desses campos ganha resumo sem ninguém mexer no código.
 
 Vale **ao vivo e ao reabrir a conversa**: a leitura do histórico devolve as mesmas
 ferramentas estruturadas ([03](03-api.md#conversas)), então a interface tem um só

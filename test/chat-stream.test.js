@@ -10,7 +10,7 @@ let box, chat;
 
 before(async () => {
   box = await createSandbox();
-  chat = await import('../services/chat/repo.js');
+  chat = await import('../services/chat/stream.js');
 });
 after(() => box.cleanup());
 

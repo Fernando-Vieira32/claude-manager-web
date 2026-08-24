@@ -47,6 +47,47 @@ export function resultText(content) {
     .join('\n');
 }
 
+// Campos do `input` que servem de resumo curto, em ordem de preferência. Genérico
+// de propósito: não é uma lista de ferramentas, é uma lista de CAMPOS. Ferramenta
+// nova que use um destes ganha resumo sem ninguém mexer aqui.
+//
+// `caminho: true` diz que o valor é um path: aí o que identifica está no FIM
+// (o nome do arquivo), então mostramos as duas últimas partes. Nos demais o que
+// identifica está no começo (`git status …`), e o corte vai no fim.
+const CAMPOS_RESUMO = [
+  { key: 'description' },
+  { key: 'command' },
+  { key: 'pattern' },
+  { key: 'query' },
+  { key: 'url' },
+  { key: 'file_path', caminho: true },
+  { key: 'path', caminho: true },
+  { key: 'name' },
+];
+const MAX_RESUMO = 48;
+
+/** Duas últimas partes de um caminho — o suficiente para reconhecer o arquivo. */
+const fimDoCaminho = (valor) => valor.split('/').filter(Boolean).slice(-2).join('/');
+
+/**
+ * Frase curta do que a ferramenta vai fazer, para caber no chip e a pessoa não
+ * precisar abrir. `subagent_type` entra na frente quando existe, porque é o que
+ * distingue dois subagentes na mesma resposta.
+ */
+export function summaryOf(input) {
+  if (!input || typeof input !== 'object') return null;
+  const partes = [];
+  if (typeof input.subagent_type === 'string' && input.subagent_type) partes.push(input.subagent_type);
+
+  const campo = CAMPOS_RESUMO.find(({ key }) => typeof input[key] === 'string' && input[key].trim());
+  if (campo) {
+    const cru = input[campo.key].trim().replace(/\s+/g, ' ');
+    const valor = campo.caminho ? fimDoCaminho(cru) : cru;
+    partes.push(valor.length > MAX_RESUMO ? `${valor.slice(0, MAX_RESUMO)}…` : valor);
+  }
+  return partes.length ? partes.join(' · ') : null;
+}
+
 /**
  * Um `tool_use` -> a forma que a interface consome (o mesmo objeto ao vivo e no
  * histórico, para o front ter um só caminho de render).
@@ -56,6 +97,7 @@ export function toolFromUse(block) {
   return {
     id: block.id || null,
     name: block.name || 'ferramenta',
+    summary: summaryOf(block.input),
     input: input?.text || null,
     inputTruncated: input?.truncated || false,
   };
