@@ -230,9 +230,38 @@ chave significa (isso é da interface).
 
 | Método | Rota | O quê |
 | --- | --- | --- |
+| GET | `/api/settings/all` | config de **todas** as conversas de uma vez (para listas) |
 | GET | `/api/settings/:id` | lê a configuração da conversa (`{ id, settings }`) |
 | PUT | `/api/settings/:id` | mescla e grava (body: objeto chave/valor) |
 | DELETE | `/api/settings/:id` | apaga a config da conversa; devolve `{ id, settings }` (o que existia) |
+
+### `GET /api/settings/all` — por que existe
+
+Uma lista precisa saber a cor de **dezenas** de conversas para desenhar. Uma
+requisição por conversa (57 no meu caso) é inaceitável, e `conversations` não pode
+ler `settings` — serviço não conhece serviço ([02](02-arquitetura.md)). Então quem
+oferece o lote é o próprio serviço de configuração.
+
+```bash
+curl -s localhost:7788/api/settings/all
+```
+
+```json
+{
+  "items": [
+    { "id": "-home-fernando-www-hisofi:1007aa54-…", "settings": { "color": "#17c964" } },
+    { "id": "-home-fernando:9e934df4-…",            "settings": { "color": "#ff6a45", "mode": "plan" } }
+  ]
+}
+```
+
+- devolve **só quem tem alguma chave gravada** — conversa sem config não aparece;
+- a rota é registrada **antes** de `/:id`, senão `all` seria casado como se fosse um
+  id (o router casa na ordem de registro);
+- o `id` é reconstruído a partir do nome do arquivo: na gravação o `:` virou `_`, e o
+  `sessionId` nunca tem `_`, então o **último** `_` é sempre o separador. O resultado
+  passa pelo `resolveConversationId`, então arquivo estranho na pasta é ignorado em vez
+  de virar um id inventado.
 
 ```bash
 ID='-home-fernando:57316179-7a65-49bc-940d-ce557e574dfa'

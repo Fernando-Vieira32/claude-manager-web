@@ -1,4 +1,4 @@
-import { getSettings, saveSettings, deleteSettings } from './repo.js';
+import { getSettings, saveSettings, deleteSettings, listAllSettings } from './repo.js';
 
 export default {
   id: 'settings',
@@ -6,6 +6,14 @@ export default {
   description: 'Preferências por conversa (modo, cor…), gravadas em data/conversas/',
   basePath: '/api/settings',
   routes: [
+    // ANTES de '/:id': o router casa na ordem de registro, e '/all' também casaria
+    // como se 'all' fosse um id.
+    {
+      method: 'GET',
+      path: '/all',
+      summary: 'lê a config de todas as conversas de uma vez (para listas): { items: [{ id, settings }] }',
+      handler: async () => ({ items: await listAllSettings() }),
+    },
     {
       method: 'GET',
       path: '/:id',

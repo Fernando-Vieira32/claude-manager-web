@@ -183,6 +183,13 @@ table.grid th {
 }
 table.grid td { padding: 11px 12px; border-top: 1px solid var(--line); vertical-align: middle; }
 table.grid tr:hover td { background: var(--surface); }
+
+/* Linha com cor escolhida na conversa: faixa à esquerda (a cor exata) + tinta
+   discreta na linha (para achar de olho na rolagem). A cor vem numa variável
+   inline, então isto serve para qualquer cor e funciona nos dois temas. */
+table.grid tr.accent td { background: color-mix(in srgb, var(--row-accent) 8%, transparent); }
+table.grid tr.accent:hover td { background: color-mix(in srgb, var(--row-accent) 18%, var(--surface)); }
+table.grid tr.accent td:first-child { box-shadow: inset 3px 0 0 var(--row-accent); }
 .code { font-family: var(--mono); font-size: 12px; color: var(--text-dim); }
 
 /* --------------------------------------------------------------- drawer */

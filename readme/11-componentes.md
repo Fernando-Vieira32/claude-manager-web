@@ -164,6 +164,35 @@ createDataTable({
 `onClick` por coluna já faz `stopPropagation`, então botões dentro da linha não
 disparam o clique da linha.
 
+### Destacar uma linha
+
+`rowClass(row)` e `rowStyle(row)` marcam o `<tr>` sem a tabela saber o motivo — ela
+só repassa. É assim que o painel de Conversas mostra a **cor configurada** de cada
+conversa:
+
+```js
+createDataTable({
+  rows: items,
+  rowClass: (c) => (cores.has(c.id) ? 'accent' : null),
+  rowStyle: (c) => (cores.has(c.id) ? `--row-accent:${cores.get(c.id)}` : null),
+  columns: [ /* … */ ],
+});
+```
+
+O CSS lê a variável (`table.grid tr.accent`): faixa de 3px à esquerda com a cor exata
+e uma tinta de 8% na linha (18% no hover), via `color-mix` — funciona nos dois temas
+sem cor fixa.
+
+Duas armadilhas que valem lembrar:
+
+- as duas funções só entram no `<tr>` **quando devolvem valor**. O `el()` faz
+  `node.className = v` sem checar `null`, então um `class: null` viraria literalmente
+  `class="null"`;
+- o valor de `rowStyle` vai para um atributo `style`. Se a origem for dado gravado
+  (um arquivo de config, por exemplo), **valide** antes — o painel de Conversas só
+  aceita cor que casa com `/^#[0-9a-fA-F]{3,8}$/`, para um valor torto não virar
+  declaração de estilo solta.
+
 ## `activity.js`
 
 Indicador de "algo está acontecendo agora" — bolinha pulsando + rótulo + relógio de

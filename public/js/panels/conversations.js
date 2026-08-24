@@ -15,6 +15,15 @@ import { MODE_CHOICES } from '../core/chat-fields.js';
 // Amostras da paleta da janela — as mesmas cores vivas dos tokens do tema.
 const WINDOW_COLORS = ['#ff6a45', '#ff4f8b', '#a855f7', '#3b82f6', '#06b6d4', '#17c964', '#ffb020', '#f43f5e'];
 
+// A cor entra numa variável CSS inline, então só aceitamos hex de verdade: um valor
+// torto no arquivo de config não pode virar declaração de estilo solta.
+const HEX = /^#[0-9a-fA-F]{3,8}$/;
+
+/** `[{ id, settings }]` -> Map(id -> cor), só das conversas com cor válida. */
+const colorsOf = (items) => new Map(items
+  .filter((s) => HEX.test(s.settings?.color || ''))
+  .map((s) => [s.id, s.settings.color]));
+
 // Estado FORA do ciclo do painel: as janelas de conversa vivem soltas na tela
 // (no <body>) e sobrevivem à navegação entre menus. `refreshList` aponta para o
 // `load()` do painel montado no momento (ou null se não estamos em Conversas), pra
@@ -41,20 +50,28 @@ export default {
     async function load() {
       body.replaceChildren(states.loading(4));
       try {
-        const { items } = await api.conversations.list(term);
+        // as cores vêm numa requisição só (não uma por conversa); se essa falhar,
+        // a lista ainda aparece — sem cor é muito melhor que sem lista.
+        const [{ items }, cfg] = await Promise.all([
+          api.conversations.list(term),
+          api.settings.all().catch(() => ({ items: [] })),
+        ]);
         ctx.setCount(items.length);
         info.textContent = items.length
           ? `${items.length} conversa(s)${term ? ` casando com "${term}"` : ''}`
           : '';
-        body.replaceChildren(table(items));
+        body.replaceChildren(table(items, colorsOf(cfg.items)));
       } catch (err) {
         body.replaceChildren(states.error(err, load));
       }
     }
 
-    function table(items) {
+    function table(items, colors) {
       return createDataTable({
         rows: items,
+        // a linha da conversa que tem cor configurada nasce marcada, para achar de olho
+        rowClass: (c) => (colors.has(c.id) ? 'accent' : null),
+        rowStyle: (c) => (colors.has(c.id) ? `--row-accent:${colors.get(c.id)}` : null),
         empty: states.empty(
           term ? 'Nada casa com esse filtro' : 'Nenhuma conversa encontrada',
           term ? 'Tente outro termo.' : 'Converse com o Claude Code e volte aqui.'),
@@ -164,7 +181,11 @@ export default {
       const colorPicker = createColorPicker({
         value: saved.color || '',
         swatches: WINDOW_COLORS,
-        onChange: (color) => { win?.setAccent(color); saveSetting({ color }); },
+        // troca a cor da janela, grava, e repinta a linha na lista (se estiver aberta)
+        onChange: (color) => {
+          win?.setAccent(color);
+          saveSetting({ color }).then(() => refreshList?.());
+        },
       });
 
       win = createFloatingWindow({
