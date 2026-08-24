@@ -26,12 +26,45 @@ function fileFor(id) {
 
 /** Lê o objeto de config do disco; ausência/erro = sem config (objeto vazio). */
 async function read(file) {
+  let raw;
   try {
-    const data = JSON.parse(await fs.readFile(file, 'utf8'));
+    raw = await fs.readFile(file, 'utf8');
+  } catch {
+    return {};                                     // nunca foi salva: normal
+  }
+  try {
+    const data = JSON.parse(raw);
     return data && typeof data === 'object' && !Array.isArray(data) ? data : {};
   } catch {
+    // Cair no padrão em silêncio esconde perda de dado: avise em quem tem terminal.
+    console.warn(`[settings] ${file} está ilegível; assumindo config vazia`);
     return {};
   }
+}
+
+/**
+ * Grava sem nunca deixar o arquivo pela metade: escreve num `.tmp` e renomeia
+ * (rename é atômico no mesmo filesystem). Sem isto, dois PUT ao mesmo tempo
+ * truncavam e escreviam por cima um do outro — o JSON saía partido e o `read()`
+ * devolvia `{}`, como se a configuração tivesse sido apagada.
+ */
+async function writeAtomic(file, body) {
+  const tmp = `${file}.${process.pid}.tmp`;
+  await fs.writeFile(tmp, body, 'utf8');
+  await fs.rename(tmp, file);
+}
+
+// Uma fila por arquivo. Escrita atômica sozinha não basta: PATCH é ler-mesclar-
+// gravar, e duas chamadas concorrentes leriam a mesma base e uma perderia a
+// chave da outra. Serializar por caminho mantém a mesclagem correta.
+const queues = new Map();
+
+function enqueue(file, task) {
+  const run = (queues.get(file) || Promise.resolve()).then(task, task);
+  const guard = run.catch(() => {});
+  queues.set(file, guard);
+  guard.then(() => { if (queues.get(file) === guard) queues.delete(file); });
+  return run;
 }
 
 /** Config atual da conversa (objeto vazio se nunca foi salva). */
@@ -59,16 +92,18 @@ function validate(patch) {
  */
 async function merge(file, patch) {
   validate(patch);
-  const merged = { ...(await read(file)), ...patch };
-  for (const [k, v] of Object.entries(patch)) {
-    if (v === null || v === '') delete merged[k];
-  }
+  return enqueue(file, async () => {
+    const merged = { ...(await read(file)), ...patch };
+    for (const [k, v] of Object.entries(patch)) {
+      if (v === null || v === '') delete merged[k];
+    }
 
-  const body = JSON.stringify(merged, null, 2);
-  if (Buffer.byteLength(body) > MAX_BYTES) throw badRequest('configuração grande demais');
-  await fs.mkdir(path.dirname(file), { recursive: true });
-  await fs.writeFile(file, body, 'utf8');
-  return merged;
+    const body = JSON.stringify(merged, null, 2);
+    if (Buffer.byteLength(body) > MAX_BYTES) throw badRequest('configuração grande demais');
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    await writeAtomic(file, body);
+    return merged;
+  });
 }
 
 /** Grava a config de uma conversa. */
@@ -93,7 +128,11 @@ export async function saveGlobalSettings(patch) {
  */
 export async function deleteSettings(id) {
   const file = fileFor(id);
-  const settings = await read(file);
-  await fs.rm(file, { force: true });
+  // na mesma fila do merge: apagar durante um ler-mesclar-gravar ressuscitaria o arquivo
+  const settings = await enqueue(file, async () => {
+    const existing = await read(file);
+    await fs.rm(file, { force: true });
+    return existing;
+  });
   return { id, settings };
 }

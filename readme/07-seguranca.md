@@ -69,3 +69,9 @@ Quando você chegar ao editor (gravar arquivos), leve estas quatro:
 3. escrita atômica: grave em `arquivo.tmp` e depois `rename` — nunca truncando o
    original;
 4. lista de extensões/caminhos negados (ex.: `.ssh/`, `.env`) se a raiz for o home.
+
+O item 3 já vale hoje em `services/settings/repo.js`, e não é teórico: sem ele, dois
+`PUT` concorrentes no mesmo arquivo de config o deixavam com JSON partido, e o `read()`
+tratava isso como "sem config" — perda silenciosa. Além do `.tmp` + `rename`, as
+gravações do mesmo caminho são **serializadas numa fila**, porque `PATCH` é
+ler-mesclar-gravar: só atomicidade não impede uma chamada de perder a chave da outra.

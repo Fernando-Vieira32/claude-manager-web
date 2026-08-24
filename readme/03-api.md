@@ -299,6 +299,11 @@ curl -s -X PUT "localhost:7788/api/settings/$(...)" \
 ```
 
 - **semântica PATCH:** o `PUT` mescla — mande só a chave que mudou;
+- **gravação atômica e serializada:** o arquivo é escrito num `.tmp` e renomeado, e as
+  gravações do mesmo arquivo entram numa fila. Dois `PUT` ao mesmo tempo (dois campos
+  editados em sequência na interface) antes disso truncavam e escreviam um por cima do
+  outro: o JSON saía partido e o `GET` seguinte devolvia `{}`, como se a config tivesse
+  sido apagada. Arquivo ilegível agora também gera aviso no console do servidor;
 - **voltar ao padrão:** valor `""` ou `null` **remove** a chave (`{"color":""}` apaga a cor);
 - chaves são curtas e alfanuméricas (`^[a-zA-Z0-9_-]{1,40}$`); valores só
   texto/número/booleano; o arquivo tem teto de 16 KB — id ou chave inválidos dão 400;
