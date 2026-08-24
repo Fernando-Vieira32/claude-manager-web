@@ -78,11 +78,17 @@ fmt.clock(iso)     // data e hora completas (bom para title=)
 ```js
 toast('Sessão encerrada.', { type: 'ok' });            // ok | err | info
 toast('Conversa na lixeira.', {
-  type: 'ok', timeout: 8000,
+  type: 'ok',
   action: { label: 'Desfazer', run: () => restaurar() },
 });
 ```
-Passar o mouse por cima cancela o timer de fechamento.
+Fecha sozinho em **5 s** (`TOAST_MS`, exportado do `ui.js`). O `timeout` é opcional e
+serve para pedir *menos* tempo: ele é limitado ao teto, então passar `9000` não estica
+nada — não existe toast permanente.
+
+Passar o mouse por cima **adia** o fechamento enquanto o ponteiro estiver ali (dá tempo
+de mirar o "Desfazer"); ao sair, o relógio recomeça. Fechar pelo botão de ação também
+cancela o timer, sem deixar `setTimeout` pendente.
 
 ```js
 const ok = await confirmAction({
@@ -136,7 +142,7 @@ arquivo porque vários componentes usam `display: grid/flex` — sem isso o atri
 | Nova conversa | `panels/new-conversation.js` | tela inicial; barra de modelo/pasta/modo + `chat`; inicia a conversa (`api.chat.start`) e depois continua |
 | Sessões | `panels/sessions.js` | auto-refresh de 5s com `destroy()` limpando o timer; SIGTERM → oferta de SIGKILL no toast |
 | Conversas | `panels/conversations.js` | compõe `data-table` + `chat` + `context-meter` + `inline-edit` (renomear) + `color-picker`; abre em janelas flutuantes (várias, não-modais) com modo/cor salvos por conversa; **a linha da lista aparece na cor configurada** (faixa + tinta, via `rowClass`/`rowStyle` — ver [11](11-componentes.md#destacar-uma-linha)); deletar com "Desfazer" |
-| Lixeira | `panels/trash.js` | filtro local (a lista é pequena) e restauração |
+| Lixeira | `panels/trash.js` | filtro local (a lista é pequena), restauração e expurgo por idade ([`duration-field`](11-componentes.md#duration-fieldjs) + retenção na config global) |
 | Serviços | `panels/services.js` | desenha `/api/_services`: documentação que não desatualiza |
 
 ## Leitor e chat de conversas

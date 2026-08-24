@@ -26,8 +26,24 @@ matar processos e ler suas conversas.
 - Nunca é `unlink`: é `rename` para `~/.claude/.trash-conversas`, com nome
   `AAAAMMDD-HHMMSS_<projeto>_<sessao>.jsonl`.
 - A restauração devolve o arquivo ao projeto de origem lendo esse nome.
-- Esvaziar de vez é decisão manual: `rm -rf ~/.claude/.trash-conversas`.
-- A interface avisa antes (modal) e oferece **Desfazer** por 8 segundos depois.
+- A interface avisa antes (modal) e oferece **Desfazer** no toast (5 s — teto de
+  `TOAST_MS` em `core/ui.js`).
+
+## Apagar da lixeira de vez (`/trash/purge`)
+
+É o **único** caminho do app que apaga arquivo de conversa sem volta. As decisões:
+
+- **nunca automático.** Não há expiração, cron nem varredura no boot: só apaga quando
+  alguém clica. A retenção configurada é um *parâmetro do botão*, não um agendamento;
+- **só por idade, nunca "tudo".** `value` é inteiro de 1 a 999 e `unit` só pode ser
+  `days`/`months`/`years`; não existe forma de pedir "apague a lixeira inteira" numa
+  chamada — o mais agressivo possível é 1 dia, que ainda poupa o que foi deletado hoje;
+- **`dryRun` antes.** A interface pergunta primeiro o que iria embora e mostra
+  quantidade e tamanho no modal; só depois manda a chamada real;
+- **nomes não vêm do cliente.** Os arquivos a apagar saem do `listTrash()` do próprio
+  serviço (já restrito a `.jsonl` dentro de `trashDir`) — o corpo da requisição só
+  informa idade, então não há caminho para travessia de diretório;
+- fora do app, esvaziar na mão continua valendo: `rm -rf ~/.claude/.trash-conversas`.
 
 ## Caminhos e ids
 
@@ -53,3 +69,9 @@ Quando você chegar ao editor (gravar arquivos), leve estas quatro:
 3. escrita atômica: grave em `arquivo.tmp` e depois `rename` — nunca truncando o
    original;
 4. lista de extensões/caminhos negados (ex.: `.ssh/`, `.env`) se a raiz for o home.
+
+O item 3 já vale hoje em `services/settings/repo.js`, e não é teórico: sem ele, dois
+`PUT` concorrentes no mesmo arquivo de config o deixavam com JSON partido, e o `read()`
+tratava isso como "sem config" — perda silenciosa. Além do `.tmp` + `rename`, as
+gravações do mesmo caminho são **serializadas numa fila**, porque `PATCH` é
+ler-mesclar-gravar: só atomicidade não impede uma chamada de perder a chave da outra.

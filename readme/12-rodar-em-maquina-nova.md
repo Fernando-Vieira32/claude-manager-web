@@ -87,7 +87,10 @@ Detalhes e outros erros comuns em [09 · Problemas](09-problemas.md).
   [03 · API](03-api.md#configurações-settings).
 - **Lista de conversas/sessões diferente:** ela reflete o Claude Code **desta** máquina,
   não o da origem. Isso é o esperado.
-- Nada de `node_modules`: o projeto não tem dependências.
+- Nada de `node_modules`: o projeto não tem dependências. Isso vale para os testes
+  também — `npm test` roda com o runner embutido do Node, sem instalar nada (ver
+  [13 · Testes](13-testes.md)). É uma boa primeira verificação nesta máquina, porque
+  não depende do `claude` nem das suas conversas.
 
 ## 6. O atalho `.desktop`
 

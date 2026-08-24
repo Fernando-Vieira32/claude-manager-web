@@ -17,6 +17,7 @@ deles ficar gigante. Comece pelo primeiro se você acabou de chegar.
 | 10 | [Chat](10-chat.md) | iniciar/continuar conversa pelo navegador: modos de permissão, imagens, respostas rápidas, custo |
 | 11 | [Componentes](11-componentes.md) | catálogo das peças de UI (feed, chat, janela flutuante, image-tray…): contratos e como criar outra |
 | 12 | [Rodar em uma máquina nova](12-rodar-em-maquina-nova.md) | runbook de setup para a outra máquina: pré-requisitos, subir, verificar (Linux/Mac/Windows) |
+| 13 | [Testes](13-testes.md) | `npm test` com o runner embutido do Node (zero dependências), o sandbox que isola seus dados, e a tradução RSpec → `node:test` |
 
 ## Em uma frase
 
@@ -31,6 +32,7 @@ para o projeto poder crescer até virar um editor de código no navegador.
 ```bash
 ./start.sh                  # sobe o servidor e abre o navegador
 npm run dev                 # servidor com --watch (reinicia ao salvar)
+npm test                    # suíte de testes (ver 13) — sem instalar nada
 PORT=9000 npm start         # outra porta
 curl -s localhost:7788/api/_services | less   # mapa das rotas registradas
 ```
@@ -49,3 +51,4 @@ curl -s localhost:7788/api/_services | less   # mapa das rotas registradas
 | mudar porta, caminhos, host | `core/config.js` (ou variáveis `PORT`/`HOST`) |
 | mudar regra de sessões (ps, kill) | `services/sessions/repo.js` |
 | mudar leitura das conversas | `services/conversations/repo.js` |
+| escrever ou rodar teste | `test/*.test.js` (ver [13](13-testes.md)) |

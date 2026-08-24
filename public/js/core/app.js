@@ -118,7 +118,7 @@ const serverStatus = createServerStatus({
       await navigator.clipboard.writeText(startCmd);
       toast('Comando copiado — cole no terminal para ligar o servidor.', { type: 'info' });
     } catch {
-      toast(`Rode no terminal: ${startCmd}`, { type: 'info', timeout: 9000 });
+      toast(`Rode no terminal: ${startCmd}`, { type: 'info' });
     }
   },
 });

@@ -89,8 +89,14 @@ readme/      documentação longa; comece por readme/README.md
 - **Antes de criar componente:** confirmou que nenhum em `public/js/components/` já
   resolve? Reaproveitar/estender vem antes de criar.
 - `node --check` em cada `.js` alterado.
+- **`npm test` verde.** Mexeu em regra de negócio (`services/*/repo.js`)? Escreva ou
+  ajuste o teste — ver [`readme/13-testes.md`](readme/13-testes.md). Runner embutido do
+  Node, sem instalar nada, e o sandbox isola seus dados de verdade.
+- Teste que passa contra código quebrado não vale nada: **quebre de propósito e confirme
+  que ele acusa** antes de considerar coberto.
 - Confirme que nenhum componente novo importa `api.js`.
 - Confirme `destroy()` em quem tem timer/listener e que o painel o chama.
 - Atualize o `readme/` correspondente.
 - Se dá para testar de verdade (reiniciar `npm start`, abrir a página), teste antes de
-  dizer que está pronto.
+  dizer que está pronto. Painel e componente não têm teste automatizado — a verificação
+  deles é no navegador.

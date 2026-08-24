@@ -81,6 +81,13 @@ export const api = {
     rename: (id, name) => api.post(`/api/conversations/${encodeURIComponent(id)}/rename`, { name }),
     trash: () => api.get('/api/conversations/trash'),
     restore: (name) => api.post('/api/conversations/trash/restore', { name }),
+
+    /**
+     * Apaga da lixeira o que é mais velho que `{ value, unit }` — sem volta.
+     * Com `dryRun`, só devolve o que *iria* embora (é o preview da confirmação).
+     */
+    purgeTrash: ({ value, unit, dryRun = false }) =>
+      api.post('/api/conversations/trash/purge', { value, unit, dryRun }),
   },
   chat: {
     status: (id) => api.get(`/api/chat/${encodeURIComponent(id)}/status`),
@@ -108,8 +115,13 @@ export const api = {
     browse: (path) => api.get('/api/fs', { path }),
   },
 
-  // preferências por conversa (modo, cor…), gravadas em arquivo pelo servidor
+  // preferências chave/valor gravadas em arquivo pelo servidor: globais e por conversa
   settings: {
+    /** Config global do app: `{ settings }` (vazio se nunca salva). */
+    getGlobal: () => api.get('/api/settings'),
+    /** Mescla e grava a config global (PATCH: só o que mudou; '' remove a chave). */
+    saveGlobal: (patch) => api.put('/api/settings', patch),
+
     /** Config atual da conversa: `{ id, settings }` (settings vazio se nunca salva). */
     get: (id) => api.get(`/api/settings/${encodeURIComponent(id)}`),
     /**

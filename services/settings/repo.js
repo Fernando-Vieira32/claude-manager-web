@@ -1,7 +1,10 @@
-// Preferências por conversa (chave/valor), gravadas em arquivo — sobrevivem a
-// fechar/reabrir a janela. Uma conversa = um arquivo, ligado pelo id da conversa
-// ('<pastaDoProjeto>:<sessionId>'), que é único. Só chave/valor simples; este
-// serviço NÃO interpreta o significado das chaves (isso é da interface).
+// Preferências chave/valor gravadas em arquivo, em dois escopos com a MESMA regra:
+//   • por conversa — um arquivo por conversa em data/conversas/, ligado pelo id
+//     ('<pastaDoProjeto>:<sessionId>'), que é único;
+//   • global — um único data/settings.json, para preferência do app inteiro
+//     (ex.: a retenção da lixeira).
+// Só chave/valor simples; este serviço NÃO interpreta o significado das chaves
+// (isso é da interface) — por isso serve para qualquer preferência futura.
 
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -23,12 +26,45 @@ function fileFor(id) {
 
 /** Lê o objeto de config do disco; ausência/erro = sem config (objeto vazio). */
 async function read(file) {
+  let raw;
   try {
-    const data = JSON.parse(await fs.readFile(file, 'utf8'));
+    raw = await fs.readFile(file, 'utf8');
+  } catch {
+    return {};                                     // nunca foi salva: normal
+  }
+  try {
+    const data = JSON.parse(raw);
     return data && typeof data === 'object' && !Array.isArray(data) ? data : {};
   } catch {
+    // Cair no padrão em silêncio esconde perda de dado: avise em quem tem terminal.
+    console.warn(`[settings] ${file} está ilegível; assumindo config vazia`);
     return {};
   }
+}
+
+/**
+ * Grava sem nunca deixar o arquivo pela metade: escreve num `.tmp` e renomeia
+ * (rename é atômico no mesmo filesystem). Sem isto, dois PUT ao mesmo tempo
+ * truncavam e escreviam por cima um do outro — o JSON saía partido e o `read()`
+ * devolvia `{}`, como se a configuração tivesse sido apagada.
+ */
+async function writeAtomic(file, body) {
+  const tmp = `${file}.${process.pid}.tmp`;
+  await fs.writeFile(tmp, body, 'utf8');
+  await fs.rename(tmp, file);
+}
+
+// Uma fila por arquivo. Escrita atômica sozinha não basta: PATCH é ler-mesclar-
+// gravar, e duas chamadas concorrentes leriam a mesma base e uma perderia a
+// chave da outra. Serializar por caminho mantém a mesclagem correta.
+const queues = new Map();
+
+function enqueue(file, task) {
+  const run = (queues.get(file) || Promise.resolve()).then(task, task);
+  const guard = run.catch(() => {});
+  queues.set(file, guard);
+  guard.then(() => { if (queues.get(file) === guard) queues.delete(file); });
+  return run;
 }
 
 /** Config atual da conversa (objeto vazio se nunca foi salva). */
@@ -78,12 +114,8 @@ export async function listAllSettings() {
   return items;
 }
 
-/**
- * Mescla `patch` na config existente e grava (semântica PATCH: manda só o que mudou).
- * Valores só podem ser texto/número/booleano; chaves curtas e alfanuméricas.
- * Uma chave com valor `''` ou `null` é REMOVIDA — é assim que se "volta ao padrão".
- */
-export async function saveSettings(id, patch) {
+/** Recusa o que não é par chave/valor simples, antes de encostar no disco. */
+function validate(patch) {
   if (!patch || typeof patch !== 'object' || Array.isArray(patch)) {
     throw badRequest('configuração deve ser um objeto chave/valor');
   }
@@ -93,18 +125,42 @@ export async function saveSettings(id, patch) {
       throw badRequest(`valor inválido para "${k}" (só texto, número ou booleano)`);
     }
   }
+}
 
-  const file = fileFor(id);
-  const merged = { ...(await read(file)), ...patch };
-  for (const [k, v] of Object.entries(patch)) {
-    if (v === null || v === '') delete merged[k];
-  }
+/**
+ * Mescla `patch` no arquivo e grava (semântica PATCH: manda só o que mudou).
+ * Uma chave com valor `''` ou `null` é REMOVIDA — é assim que se "volta ao padrão".
+ * Vale para os dois escopos: só muda o arquivo de destino.
+ */
+async function merge(file, patch) {
+  validate(patch);
+  return enqueue(file, async () => {
+    const merged = { ...(await read(file)), ...patch };
+    for (const [k, v] of Object.entries(patch)) {
+      if (v === null || v === '') delete merged[k];
+    }
 
-  const body = JSON.stringify(merged, null, 2);
-  if (Buffer.byteLength(body) > MAX_BYTES) throw badRequest('configuração grande demais');
-  await fs.mkdir(config.settingsDir, { recursive: true });
-  await fs.writeFile(file, body, 'utf8');
-  return { id, settings: merged };
+    const body = JSON.stringify(merged, null, 2);
+    if (Buffer.byteLength(body) > MAX_BYTES) throw badRequest('configuração grande demais');
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    await writeAtomic(file, body);
+    return merged;
+  });
+}
+
+/** Grava a config de uma conversa. */
+export async function saveSettings(id, patch) {
+  return { id, settings: await merge(fileFor(id), patch) };
+}
+
+/** Config global do app (objeto vazio se nunca foi salva). */
+export async function getGlobalSettings() {
+  return { settings: await read(config.globalSettingsFile) };
+}
+
+/** Grava a config global — mesma semântica PATCH da config por conversa. */
+export async function saveGlobalSettings(patch) {
+  return { settings: await merge(config.globalSettingsFile, patch) };
 }
 
 /**
@@ -114,7 +170,11 @@ export async function saveSettings(id, patch) {
  */
 export async function deleteSettings(id) {
   const file = fileFor(id);
-  const settings = await read(file);
-  await fs.rm(file, { force: true });
+  // na mesma fila do merge: apagar durante um ler-mesclar-gravar ressuscitaria o arquivo
+  const settings = await enqueue(file, async () => {
+    const existing = await read(file);
+    await fs.rm(file, { force: true });
+    return existing;
+  });
   return { id, settings };
 }

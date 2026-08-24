@@ -22,6 +22,7 @@ public/js/components/
   activity.js     indicador vivo "algo está acontecendo" (pulso + tempo + barra)
   context-meter.js  barra de uso de contexto + botão compactar
   choice-select.js  dropdown de opção (+ "outro" para digitar um valor livre)
+  duration-field.js quantidade + unidade (dias/meses/anos); compõe o choice-select
   dir-picker.js   modal para navegar o disco e escolher uma pasta
   dir-field.js    campo "pasta escolhida + botão", compõe o dir-picker
   inline-edit.js  texto + botão ✎ que vira um campo (renomear no lugar)
@@ -277,6 +278,35 @@ muda — é o que deixa o painel de Conversas **gravar o modo escolhido na hora*
 
 Um `<input list=datalist>` **não** serve para "mostrar todas as opções": com um valor
 preenchido o navegador filtra e esconde o resto. Por isso um `<select>` de verdade.
+
+## `duration-field.js`
+
+Campo de "quanto tempo": quantidade + unidade num só controle. Hoje é a retenção da
+lixeira; serve para qualquer duração que apareça depois (timeout, intervalo…).
+
+Não desenha `<select>` por conta própria — **compõe** o [`choice-select`](#choice-selectjs),
+que é o único dropdown do app. E não decide nada com o número: recebe valor e callback.
+
+```js
+const ret = createDurationField({
+  label: 'apagar o que está aqui há mais de',
+  value: 30, unit: 'days',
+  onChange: ({ value, unit }) => api.settings.saveGlobal({ … }),
+});
+bar.append(ret.node);
+ret.value();      // { value: 30, unit: 'days' } — inteiro já normalizado em [min, max]
+```
+
+`value()` devolve `{ value, unit }` com o número já preso em `[min, max]` (padrão 1–999).
+`setDisabled(v)` trava os dois campos. `destroy()` é **obrigatório** chamar (ele repassa
+para o `choice-select`) — o painel Lixeira faz isso no seu `destroy()`.
+
+Grava no `change`, não no `input`: digitar "30" passaria por "3" e dispararia uma
+gravação intermediária que ninguém pediu.
+
+Também exporta `DURATION_UNITS` (as unidades, com `value` igual ao que o backend
+entende) e `formatDuration({ value, unit })`, que resolve o plural — "1 dia",
+"3 meses". Quem monta frase usa o helper em vez de concatenar `label` na mão.
 
 ## `dir-field.js`
 

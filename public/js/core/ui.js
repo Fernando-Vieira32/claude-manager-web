@@ -45,15 +45,29 @@ export const fmt = {
   },
 };
 
-export function toast(message, { type = 'info', action, timeout = 5000 } = {}) {
+// Teto de exibição de um toast. Nenhum fica mais que isso na tela.
+export const TOAST_MS = 5000;
+
+export function toast(message, { type = 'info', action, timeout = TOAST_MS } = {}) {
   const host = document.getElementById('toasts');
   const node = el('div', { class: `toast ${type}` }, el('span', {}, message));
+  const ms = Math.min(timeout, TOAST_MS);
+  let timer;
+
+  // Sai levando o timer junto: fechar pelo botão não deixa setTimeout pendente.
+  const close = () => { clearTimeout(timer); node.remove(); };
+  const arm = () => { timer = setTimeout(close, ms); };
+
   if (action) {
-    node.append(el('button', { type: 'button', onclick: () => { node.remove(); action.run(); } }, action.label));
+    node.append(el('button', { type: 'button', onclick: () => { close(); action.run(); } }, action.label));
   }
   host.append(node);
-  const timer = setTimeout(() => node.remove(), timeout);
+  arm();
+
+  // O mouse em cima só *adia* — dá tempo de mirar o "Desfazer". Ao sair, o relógio
+  // volta a correr; antes ele era cancelado e o toast ficava para sempre na tela.
   node.addEventListener('mouseenter', () => clearTimeout(timer));
+  node.addEventListener('mouseleave', arm);
   return node;
 }
 

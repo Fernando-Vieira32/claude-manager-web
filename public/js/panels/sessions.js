@@ -84,7 +84,6 @@ export default {
         if (res.alive) {
           toast(`PID ${session.pid} ignorou o ${signal}.`, {
             type: 'err',
-            timeout: 9000,
             action: { label: 'Forçar SIGKILL', run: () => forceKill(session) },
           });
         } else {
