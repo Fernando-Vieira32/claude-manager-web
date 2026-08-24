@@ -1,0 +1,49 @@
+/* Tokens de design: mude aqui, a interface toda acompanha.
+   Paleta moderna: neutros frios (slate) + coral vivo com gradiente coral→rosa. */
+:root {
+  --accent: #ff6a45;          /* coral vivo */
+  --accent-2: #ff4f8b;        /* rosa (gradiente/realces) */
+  --accent-soft: rgba(255, 106, 69, .15);
+  --on-accent: #2b0f06;       /* texto sobre o accent/gradiente */
+  --grad: linear-gradient(135deg, var(--accent), var(--accent-2));
+
+  --ok: #17c964;      --ok-soft: rgba(23, 201, 100, .16);
+  --warn: #ffb020;    --warn-soft: rgba(255, 176, 32, .16);
+  --danger: #ff4d67;  --danger-soft: rgba(255, 77, 103, .16);
+
+  --radius: 14px;
+  --radius-sm: 10px;
+  --gap: 16px;
+  --sidebar-w: 236px;
+
+  --font: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+  --mono: ui-monospace, "JetBrains Mono", "SF Mono", "Cascadia Code", Consolas, monospace;
+
+  --shadow: 0 18px 48px -16px rgba(0, 0, 0, .6);
+  --speed: 150ms;
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #0d0e13;
+  --bg-2: #14151d;
+  --surface: #1a1c26;
+  --surface-2: #232634;
+  --line: #2d3140;
+  --text: #edeef3;
+  --text-dim: #a3a8b7;
+  --text-faint: #6c7180;
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bg: #f6f7fb;
+  --bg-2: #ffffff;
+  --surface: #ffffff;
+  --surface-2: #eef0f6;
+  --line: #e3e5ee;
+  --text: #191b23;
+  --text-dim: #565c6d;
+  --text-faint: #888ea0;
+  --shadow: 0 14px 34px -12px rgba(40, 40, 70, .14);
+}

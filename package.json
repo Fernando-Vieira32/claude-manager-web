@@ -1,0 +1,12 @@
+{
+  "name": "claude-manager-web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Painel web para gerenciar sessões e conversas do Claude Code. Serviços desacoplados, sem dependências.",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "engines": { "node": ">=18" }
+}

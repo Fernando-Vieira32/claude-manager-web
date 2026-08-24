@@ -1,0 +1,425 @@
+# 11 · Componentes reutilizáveis
+
+[← sumário](README.md)
+
+> **Regra do projeto (vale para toda alteração futura).** Qualquer pedaço de
+> interface que possa aparecer duas vezes nasce como componente reutilizável em
+> `public/js/components/` — não dentro do painel. Antes de escrever UI num painel,
+> pergunte: "isso é reaproveitável?" Se for (e quase sempre é), vira componente e o
+> painel só o compõe. Ao mexer aqui, mantenha o contrato: **dados e callbacks entram
+> por parâmetro; o componente nunca importa `api.js` nem conhece rota/painel.**
+
+Painel é cola — busca dados com `api.*` e compõe componentes. Componente não conhece
+serviço, rota nem painel: recebe dados e callbacks, devolve nó.
+
+```
+public/js/components/
+  feed.js         lista paginada que cresce para cima (histórico, logs)
+  bubble.js       bolha de mensagem estática e bolha de streaming
+  composer.js     caixa de escrever com campos de opção e enviar/parar
+  chat.js         feed + composer + protocolo de stream = vista de conversa
+  data-table.js   tabela declarativa por colunas
+  activity.js     indicador vivo "algo está acontecendo" (pulso + tempo + barra)
+  context-meter.js  barra de uso de contexto + botão compactar
+  choice-select.js  dropdown de opção (+ "outro" para digitar um valor livre)
+  dir-picker.js   modal para navegar o disco e escolher uma pasta
+  dir-field.js    campo "pasta escolhida + botão", compõe o dir-picker
+  inline-edit.js  texto + botão ✎ que vira um campo (renomear no lugar)
+  image-tray.js   anexar/colar imagens (botão + Ctrl+V + miniaturas)
+  floating-window.js  janela flutuante arrastável/redimensionável (não-modal)
+  color-picker.js   botão + paleta de cores (amostras + cor livre)
+  quick-replies.js  botões de resposta rápida (opções detectadas na pergunta)
+  server-status.js  status do servidor (verde/vermelho) + reiniciar/desligar
+```
+
+> **Um controle = um componente.** O `<select>` de opção é o `choice-select` — e o
+> próprio `composer` o usa para renderizar seus campos. Nunca monte um `<select>`/
+> `<input>` de opção solto num painel; componha o componente. Foi o erro do "ferramentas
+> aparecia em dois lugares com dois renderizadores".
+
+Componentes de casca (toasts, modal, drawer, estados) continuam em
+[`core/ui.js`](06-interface.md) — são únicos na página, não instanciáveis.
+
+## `feed.js`
+
+Lista que se lê do fim para o começo e libera mais ao subir.
+
+```js
+const feed = createFeed({
+  fetchPage: ({ limit, before }) => api.conversations.read(id, { limit, before }),
+  renderItem: (m) => messageBubble(m),
+  pageSize: 20,
+  triggerPx: 150,
+  onState: ({ shown, total, hasMore }) => drawer.setSubtitle(`${shown} de ${total}`),
+  labels: { done: (t) => `· início · ${t} itens ·` },
+});
+container.append(feed.node);
+feed.attach(scrollerElement);     // quem realmente rola
+await feed.loadFirst();           // abre já rolado até o fim
+```
+
+`fetchPage` deve devolver `{ items|messages, total, from, hasMore }` — o mesmo
+formato da paginação da API ([03](03-api.md)). O componente cuida de: ancorar a
+posição ao inserir itens antigos, estados do sentinel (carregando / botão / início /
+erro com "tentar de novo") e `append()` para itens novos no fim.
+
+| Método | O quê |
+| --- | --- |
+| `attach(el)` | liga o scroll infinito ao elemento que rola |
+| `loadFirst()` / `loadMore()` | primeira janela (rola ao fim) / janela anterior |
+| `append(...nós)` | adiciona no fim; rola se você já estava no fim |
+| `scrollToEnd()` · `state()` · `destroy()` | utilidades |
+
+Serve para qualquer histórico longo: mensagens hoje, saída de terminal ou lista de
+commits depois.
+
+## `bubble.js`
+
+```js
+messageBubble({ role: 'user', text, at, badge });   // → Node
+```
+
+```js
+const b = streamBubble({ role: 'assistant' });      // → controles
+feed.append(b.node);
+b.append('pedaço de texto');   // streaming
+b.addTool('Bash');             // etiqueta de ferramenta
+b.addNotice('limite de uso');  // aviso discreto
+b.setStatus('claude-opus-5');  // chip do cabeçalho
+b.setError('deu erro');        // marca a bolha
+b.finish('$0.0116 · 1 turno'); // encerra o estado "digitando"
+```
+
+Quem consome um stream nunca toca no DOM: só chama esses métodos.
+
+## `composer.js`
+
+Caixa de escrever genérica — não sabe o que faz com o texto.
+
+```js
+const composer = createComposer({
+  placeholder: 'Escreva…',
+  submitLabel: 'Enviar',
+  fields: [{
+    name: 'mode', label: 'modo', value: 'none',
+    choices: [{ value: 'none', label: 'só conversa', title: 'não toca em nada' }],
+  }],
+  allowImages: true,                     // habilita anexar/colar imagem (image-tray)
+  onSubmit: async (text, values, images) => enviar(text, values.mode, images),
+  onStop: () => api.chat.stop(id),      // mostra "Parar" enquanto ocupado
+  submitOnEnter: true,                   // Enter envia, Shift+Enter quebra linha
+});
+footer.append(composer.node);
+composer.setBusy(true);                  // trava enquanto responde
+composer.setHint('$0.0116 · 1 turno');   // rodapé à direita
+composer.setNotice('aviso importante');  // faixa amarela acima
+composer.focus();
+```
+
+Amanhã serve para mensagem de commit, prompt do editor ou caixa de comando — muda
+só `fields` e `onSubmit`.
+
+## `chat.js`
+
+Junta feed + composer + o protocolo de eventos de stream ([contrato em 10](10-chat.md)).
+
+```js
+const chat = createChat({
+  fetchPage: (opts) => api.conversations.read(c.id, opts),
+  send: (text, values, onEvent, signal) =>
+    api.chat.send(c.id, { text, mode: values.mode }, onEvent, signal),
+  onStop: () => api.chat.stop(c.id),
+  fields: [{ name: 'mode', value: 'none', choices: MODE_CHOICES }],
+  onState: ({ shown, total }) => drawer.setSubtitle(`${shown} de ${total}`),
+  onFinish: () => chat.reload(),   // relê do disco depois da resposta
+});
+
+drawer.open({ body: chat.node, footer: chat.footer, onClose: () => chat.destroy() });
+chat.attach(drawer.scroller());
+await chat.start();
+chat.notice('esta conversa está aberta num terminal');
+```
+
+O transporte é injetado: qualquer serviço que emita os eventos do contrato
+(`init`, `delta`, `message`, `tool`, `notice`, `result`, `error`, `done`) reaproveita
+esta vista inteira. `mountChat(container, chat)` monta fora do drawer.
+
+## `data-table.js`
+
+```js
+createDataTable({
+  rows: items,
+  empty: states.empty('Nada aqui'),
+  onRowClick: (row) => abrir(row),
+  columns: [
+    { label: 'Quando', className: 'code', width: '110px',
+      render: (r) => fmt.when(r.modifiedAt), title: (r) => fmt.clock(r.modifiedAt) },
+    { label: 'Msgs', key: 'messages', className: 'code' },
+    { label: 'Assunto', render: (r) => r.title, onClick: (r) => abrir(r) },
+    { label: '', render: (r) => botões(r) },
+  ],
+});
+```
+
+`onClick` por coluna já faz `stopPropagation`, então botões dentro da linha não
+disparam o clique da linha.
+
+## `activity.js`
+
+Indicador de "algo está acontecendo agora" — bolinha pulsando + rótulo + relógio de
+tempo decorrido, com barra indeterminada opcional. Genérico: não sabe **o quê** está
+acontecendo, só que está e há quanto tempo. É a resposta honesta quando não dá para
+medir progresso real.
+
+```js
+const act = createActivity({ label: 'pensando…' });   // sem barra (cabe num chip)
+who.append(act.node);
+act.start();                 // começa a contar (0s, 1s, 2s…)
+act.label('escrevendo…');    // troca o texto sem zerar o relógio
+act.stop();                  // para e libera o timer — sempre no fim
+
+createActivity({ label: 'Compactando…', bar: true });  // com barra, para rodapés
+```
+
+`destroy()` é obrigatório se o nó puder sumir com a operação ainda viva (drawer
+fechado no meio). Quem usa: [`bubble.js`](#bubblejs) (estado "trabalhando" da resposta)
+e [`context-meter.js`](#context-meterjs) (o `/compact` rodando). Amanhã: um deploy, um
+build, qualquer tarefa de duração desconhecida.
+
+## `context-meter.js`
+
+Barra de "quanto do contexto já está ocupado" + botão de compactar. Só números e um
+callback — não sabe de conversa nem de API. Compõe [`activity.js`](#activityjs).
+
+```js
+const meter = createContextMeter({ onCompact: () => compactar(), warnAt: 0.75 });
+footer.prepend(meter.node);
+meter.set({ tokens: 258000, window: 1_000_000 });   // "contexto 258k / 1M"
+const before = meter.tokens();                       // total atual (para o antes→depois)
+meter.setBusy(true);                                 // troca a barra pela atividade viva
+```
+
+`set({ tokens: null })` mostra `—` (conversa sem uso registrado). A barra fica em cor
+de alerta ao passar de `warnAt`. Durante `setBusy(true)` a barra estática vira o
+indicador de [`activity.js`](#activityjs) (pulso + tempo + barra indeterminada), porque
+o `/compact` é opaco e não dá para medir %. O painel guarda `before` e, ao terminar,
+mostra o antes→depois no toast. `destroy()` é obrigatório (o indicador tem timer).
+Serve para qualquer recurso com "orçamento" visível: tokens hoje, cota de disco depois.
+
+## `dir-picker.js`
+
+Modal que navega o disco do servidor e devolve a pasta escolhida. Desacoplado: recebe
+a função `browse` por parâmetro — **não importa `api.js`** nem conhece rota.
+
+```js
+const dir = await openDirPicker({
+  browse: api.fs.browse,        // (path?) => { path, parent, home, entries:[{name,path}] }
+  start: '/home/eu/projetos',   // opcional; vazio = HOME do servidor
+});
+if (dir) usar(dir);             // null = cancelou
+```
+
+Devolve uma `Promise<string|null>`. Serve para qualquer "escolher onde": iniciar uma
+conversa numa pasta hoje, "abrir pasta" no editor amanhã. O back que alimenta o
+`browse` é o serviço `fs` (`GET /api/fs`), que só lista diretórios — nunca lê arquivo.
+
+## `choice-select.js`
+
+O **único** dropdown de opção do app: ferramentas (no chat e na barra de nova
+conversa), modelo, e o que vier. Com `allowCustom`, ganha uma opção livre que revela um
+campo de texto — para valores que não estão na lista (ex.: um id de modelo específico,
+`claude-opus-4-8`). Recebe as opções por parâmetro.
+
+```js
+const mode = createChoiceSelect({ choices: MODE_CHOICES, value: 'none' });
+const model = createChoiceSelect({
+  choices: MODEL_CHOICES, value: 'opus', allowCustom: true,
+  customLabel: 'versão específica…', customPlaceholder: 'ex.: claude-opus-4-8',
+});
+enviar({ mode: mode.value(), model: model.value() });
+```
+
+`value()` devolve a opção escolhida ou, em "outro", o texto digitado. `setDisabled(v)`
+trava durante um envio. `onChange(v)` (opcional) dispara sempre que o valor efetivo
+muda — é o que deixa o painel de Conversas **gravar o modo escolhido na hora** (ver
+[`settings`](03-api.md#configurações-settings)), sem esperar o envio. O
+[`composer`](#composerjs) usa este mesmo componente para renderizar seus `fields`
+(e repassa o `onChange` de cada campo) — então um `<select>` de opção nunca é montado à mão.
+
+Um `<input list=datalist>` **não** serve para "mostrar todas as opções": com um valor
+preenchido o navegador filtra e esconde o resto. Por isso um `<select>` de verdade.
+
+## `dir-field.js`
+
+Campo de pasta: mostra o caminho escolhido + um botão que abre o
+[`dir-picker`](#dir-pickerjs). Compõe o picker e guarda a escolha; recebe `browse` por
+parâmetro (não importa `api.js`).
+
+```js
+const dir = createDirField({ browse: api.fs.browse, value: cwd, onChange: (d) => {} });
+bar.append(dir.node);
+iniciar({ cwd: dir.value() });   // dir.set(path) e dir.setDisabled(true) também existem
+```
+
+## `inline-edit.js`
+
+Texto editável no lugar: mostra um valor + um botão ✎ que troca por um campo com
+Salvar/Cancelar (Enter salva, Esc cancela). Recebe o valor e um `onSave` por
+parâmetro — não sabe de API nem de painel.
+
+```js
+const ie = createInlineEdit({
+  value: c.name || '', emptyLabel: 'sem nome', editTitle: 'Renomear',
+  onSave: async (novo) => { await api.conversations.rename(c.id, novo); },
+});
+cell.append(ie.node);
+// ie.edit() abre o campo por fora; ie.set(v) atualiza; ie.value() lê
+```
+
+Se `onSave` rejeitar, o componente fica em edição para tentar de novo (quem chama
+mostra o erro). Para os botões dentro dele. Serve para renomear uma conversa hoje
+(célula "Nome"), um arquivo/aba no editor amanhã.
+
+## `image-tray.js`
+
+Anexar imagens a uma mensagem: botão de escolher arquivo, **colar** (Ctrl+V) e uma
+tira de miniaturas com remover. Desacoplado — guarda as imagens em memória e as
+entrega em base64; não sabe de API. Tem duas partes de UI (a tira e o botão) porque
+vivem em lugares diferentes do composer, então expõe `strip` e `button` separados.
+
+```js
+const tray = createImageTray();
+above.append(tray.strip);      // miniaturas acima da caixa
+row.append(tray.button);       // botão 🖼 na linha de ações
+tray.attachPaste(textarea);    // liga o Ctrl+V na textarea
+enviar({ images: tray.items() });   // [{ media_type, data(base64) }]
+tray.clear();                  // depois de enviar
+```
+
+Quem usa é o [`composer`](#composerjs), com a opção `allowImages: true` — então o chat
+inteiro (Conversas e Nova conversa) ganha "colar imagem" de graça. Aceita PNG, JPEG,
+GIF e WebP; no máximo 6 por mensagem (o back revalida). As imagens viajam como blocos
+`image` no `--input-format stream-json` do CLI ([10 · Chat](10-chat.md)).
+
+## `floating-window.js`
+
+Janela flutuante **arrastável** (pelo cabeçalho), **redimensionável** (alça no canto)
+e **não-modal**: o host das janelas não captura cliques, então dá para abrir várias e
+continuar usando a página por baixo. É o que substitui o drawer nas Conversas — cada
+conversa abre numa janela própria.
+
+```js
+const win = createFloatingWindow({
+  title: 'Conversa', subtitle: '…',
+  actions: [colorPicker.node],       // controles extras no cabeçalho (antes do ✕)
+  onClose: () => limpar(),
+});
+win.bodyEl.append(chat.node);      // conteúdo rolável
+win.setFooter([meter.node, chat.footer]);
+win.attach && chat.attach(win.scroller());
+win.setSubtitle('20 de 262');      // atualiza sem redesenhar
+win.setAccent('#3b82f6');          // tinge borda + cabeçalho ('' remove o realce)
+win.focus();                        // traz para a frente
+win.close();                        // fecha (dispara onClose)
+```
+
+Empilha em cascata quando várias abrem. O `close()` remove o nó e todos os listeners
+morrem com ele. `actions` é um slot genérico no cabeçalho (a área de ações não inicia
+arrasto, então botões e popovers ali funcionam); `setAccent(cor)` injeta a cor como
+`--fw-accent` (dado do usuário, não um token) e o CSS a usa via `color-mix` — é o que
+dá a **cor por conversa**. Serve para conversas hoje e para abas/painéis flutuantes do
+editor amanhã. **Fechar a janela não deve matar nada** — quem usa decide o que o
+`onClose` faz (nas Conversas, ele destrói o chat com `abort: false`, deixando a resposta
+em andamento terminar em segundo plano, e chama `colorPicker.destroy()`).
+
+## `color-picker.js`
+
+Um botão que mostra a cor atual e abre um popover com **amostras prontas** + um
+seletor de **cor livre** (`<input type=color>`) e um "Padrão" que limpa. Dispara
+`onChange(cor)` a cada escolha; a string vazia `''` significa "voltar ao padrão".
+Burro: recebe as amostras e a cor por parâmetro, não sabe para que a cor serve.
+
+```js
+const cp = createColorPicker({
+  value: '#ff6a45',                      // cor atual ('' = padrão)
+  swatches: ['#ff6a45', '#17c964', '#3b82f6'],
+  onChange: (cor) => { win.setAccent(cor); api.settings.save(id, { color: cor }); },
+});
+header.append(cp.node);
+cp.value();       // cor atual
+cp.set('#000');   // troca por fora (encadeável)
+cp.destroy();     // remove o listener de "clique-fora" — obrigatório
+```
+
+Registra um listener de clique-fora para fechar o popover, então **`destroy()` é
+obrigatório**. Quem usa hoje é o painel de Conversas: a cor vai como `action` no
+cabeçalho da [`floating-window`](#floating-windowjs) e cada troca grava em
+[`settings`](03-api.md#configurações-settings). Amanhã: cor de uma aba do editor,
+etiqueta de um projeto — qualquer "escolher uma cor".
+
+## `quick-replies.js`
+
+Quando o Claude termina a resposta com uma **pergunta e opções em lista**, o chat
+mostra essas opções como botões acima da caixa. Clicar num botão manda aquela opção;
+"✎ escrever outra" foca a caixa (a resposta livre continua sempre possível).
+
+```js
+const qr = createQuickReplies({
+  options: [{ label: 'Sim', value: 'Sim' }, { label: 'Não', value: 'Não' }],
+  onPick: (value) => enviar(value),
+  onWrite: () => composer.focus(),
+});
+host.append(qr.node);
+```
+
+Pura apresentação — recebe as opções e callbacks. **Quem decide se há opções** é a
+função pura [`core/detect-options.js`](../public/js/core/detect-options.js)
+(`detectOptions(text)`), que o [`chat`](#chatjs) roda no fim de cada resposta. Ela é
+**conservadora**: só devolve opções quando há um sinal claro de escolha (um "?" ou
+"qual/quer/prefere…") logo antes de uma lista curta de 2–6 itens; na dúvida, nada
+aparece e você só digita.
+
+Por que heurística e não um recurso da CLI: em headless a ferramenta de pergunta
+(`AskUserQuestion`) **não existe** e o pedido de permissão **não é interceptável** —
+quando o Claude quer perguntar, ele escreve a pergunta como texto. Então lemos o texto
+dele; sem depender de nada que a CLI não ofereça, e sem poluir o transcript.
+
+## `server-status.js`
+
+Indicador vivo do servidor no rodapé da sidebar: **verde** = no ar, **vermelho** =
+fora, **âmbar pulsante** = reiniciando. Traz os controles ↻ (reiniciar) e ⏻ (desligar).
+
+```js
+const status = createServerStatus({
+  onRestart: () => api.server.restart(),   // sobe instância nova e assume
+  onStop:    () => api.server.stop(),       // desliga o processo
+  onStart:   () => copiarComando(),         // ver nota abaixo
+});
+footer.replaceChildren(status.node);
+status.set('up');   // 'up' | 'down' | 'wait' — encadeável
+```
+
+Componente burro: não faz `fetch` nem conhece rota. Quem monta (`core/app.js`) faz o
+`ping` de saúde e chama `set(...)`, e liga os callbacks às rotas
+[`/api/_server/*`](03-api.md#sistema).
+
+**Nota honesta (regra 8):** quando o servidor está **fora**, a página **não consegue
+religá-lo** — o navegador não abre programas do PC, e não há ninguém escutando para
+receber o clique. Por isso o estado `down` mostra **"▶ ligar"** que apenas dispara
+`onStart`; o `app.js` trata copiando o comando `./start.sh` para você colar no terminal.
+Desligar e reiniciar funcionam de verdade (o servidor vivo executa a ação).
+
+## Como criar um componente novo
+
+1. arquivo em `public/js/components/`, uma responsabilidade;
+2. exporta uma função `createX(opts)` (ou uma função que devolve `Node`, se não tiver
+   estado);
+3. recebe **dados e callbacks**, nunca importa `api.js`;
+4. devolve `{ node, ...métodos, destroy() }` — `destroy()` obrigatório se registra
+   listener ou timer;
+5. o CSS vai em `app.css` com prefixo do componente (`.feed-*`, `.composer-*`), usando
+   só os tokens de `tokens.css`;
+6. documente aqui com um exemplo de uso de verdade.
+
+Teste de cheiro: se para entender o componente você precisa saber que existe uma
+rota `/api/algo`, ele está acoplado demais — injete isso por parâmetro.

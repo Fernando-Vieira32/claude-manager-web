@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="pt-BR" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Claude Manager</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🧭</text></svg>">
+  <link rel="stylesheet" href="/css/tokens.css">
+  <link rel="stylesheet" href="/css/app.css">
+</head>
+<body>
+  <div class="shell">
+    <aside class="sidebar">
+      <div class="brand">
+        <span class="brand-mark">◆</span>
+        <div>
+          <strong>Claude Manager</strong>
+          <small id="brand-sub">carregando…</small>
+        </div>
+      </div>
+
+      <nav id="nav" class="nav" aria-label="Painéis"></nav>
+
+      <div class="sidebar-foot">
+        <button id="theme-toggle" class="ghost-btn" type="button" title="Alternar tema">
+          <span class="ico">◐</span> Tema
+        </button>
+        <div id="server-status"></div>
+      </div>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <div class="titles">
+          <h1 id="panel-title">—</h1>
+          <p id="panel-desc"></p>
+        </div>
+        <div class="tools">
+          <label class="search" id="search-wrap">
+            <span class="ico">⌕</span>
+            <input id="search" type="search" placeholder="filtrar…" autocomplete="off" spellcheck="false">
+            <kbd>/</kbd>
+          </label>
+          <button id="refresh" class="btn" type="button" title="Recarregar (r)">
+            <span class="ico">⟳</span> Atualizar
+          </button>
+        </div>
+      </header>
+
+      <section id="panel-root" class="panel-root" aria-live="polite"></section>
+    </main>
+  </div>
+
+  <div id="drawer" class="drawer" hidden>
+    <div class="drawer-backdrop" data-close></div>
+    <div class="drawer-sheet" role="dialog" aria-modal="true">
+      <header class="drawer-head">
+        <div>
+          <h2 id="drawer-title">—</h2>
+          <p id="drawer-sub"></p>
+        </div>
+        <button class="icon-btn" type="button" data-close aria-label="Fechar">✕</button>
+      </header>
+      <div id="drawer-body" class="drawer-body"></div>
+      <div id="drawer-foot" class="drawer-foot" hidden></div>
+    </div>
+  </div>
+
+  <div id="modal" class="modal" hidden>
+    <div class="modal-backdrop" data-cancel></div>
+    <div class="modal-card" role="dialog" aria-modal="true">
+      <h2 id="modal-title">Confirmar</h2>
+      <p id="modal-text"></p>
+      <div class="modal-actions">
+        <button id="modal-cancel" class="btn" type="button">Cancelar</button>
+        <button id="modal-ok" class="btn danger" type="button">Confirmar</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="toasts" class="toasts" aria-live="polite"></div>
+
+  <script type="module" src="/js/core/app.js"></script>
+</body>
+</html>
