@@ -45,6 +45,32 @@ matar processos e ler suas conversas.
   informa idade, então não há caminho para travessia de diretório;
 - fora do app, esvaziar na mão continua valendo: `rm -rf ~/.claude/.trash-conversas`.
 
+## A única chamada de rede externa (`models`)
+
+Até o catálogo de modelos, este app **não falava com a internet**: lia o disco e
+disparava o `claude`. O serviço `models` é a exceção, e é a exceção inteira — nada
+mais no app faz requisição externa. As decisões:
+
+- **um endpoint, um método, sem corpo.** `GET https://api.anthropic.com/v1/models`.
+  Não enviamos conversa, arquivo, prompt, nem nome de projeto — só o cabeçalho de
+  autenticação. O que volta é catálogo público de modelos;
+- **a credencial é lida, nunca copiada nem logada.** Ordem: `ANTHROPIC_API_KEY` do
+  ambiente → `~/.claude/.credentials.json` (a mesma que o CLI já usa). O token entra
+  direto no cabeçalho da requisição; não é gravado no cache, não aparece em mensagem
+  de erro e não vai para o log;
+- **o caminho de leitura não sai na rede.** Listar conversas só lê
+  `data/models.json`. Quem busca é este serviço, no máximo uma vez por dia (TTL de
+  24 h) ou quando você pede `POST /api/models/refresh`;
+- **falha não derruba nada.** Sem credencial → 409 explicando o que fazer. Sem rede →
+  cache antigo marcado `stale`, ou o palpite pelo nome marcado `windowSource: "guess"`
+  (e a interface diz que é estimativa). O app inteiro continua funcionando offline;
+- **timeout de 15 s** e `AbortSignal.timeout`, para uma rede ruim não pendurar a
+  requisição do navegador.
+
+Se você não quiser nenhuma chamada externa, apague a pasta `services/models/`: o
+registry deixa de achá-la, e o medidor de contexto volta ao palpite antigo (marcado
+como palpite). Nada mais quebra — é o ponto da arquitetura de serviços.
+
 ## Caminhos e ids
 
 - Id de conversa é validado por regex e resolvido com `path.resolve`, exigindo que

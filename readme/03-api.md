@@ -52,16 +52,42 @@ curl -s localhost:7788/api/sessions | head -20
       "uptimeSeconds": 2232,
       "cwd": "/home/fernando",
       "command": "claude",
-      "conversationId": "57316179-7a65-49bc-940d-ce557e574dfa"
+      "kind": "interactive",
+      "conversationId": "57316179-7a65-49bc-940d-ce557e574dfa",
+      "conversationSource": "guess"
     }
   ]
 }
 ```
 
-`conversationId` é **palpite**: o `.jsonl` mais recente da pasta do projeto
-correspondente ao `cwd`. O Claude não mantém o arquivo aberto num descritor, então
-não existe ligação exata processo → conversa. Com duas sessões no mesmo diretório
-o palpite pode errar.
+`conversationSource` diz **de onde saiu** o `conversationId` — e sem isso quem consome
+trata palpite como fato:
+
+| valor | significa | de onde vem |
+| --- | --- | --- |
+| `args` | **certeza**: é a conversa que aquele processo abriu | o próprio comando: `--resume <id>`, `-r <id>`, `--session-id <id>` |
+| `guess` | **palpite**: pode ser outra | o `.jsonl` mais recente da pasta do projeto correspondente ao `cwd` |
+| `null` | não se sabe | sem `cwd` legível e sem id no comando |
+
+O Claude **não** mantém o transcript aberto num descritor (conferido em
+`/proc/<pid>/fd`: só tty, epoll e `/dev/urandom`), e um `claude` cru do terminal não
+declara id nenhum — então para ele não existe ligação exata processo → conversa. Daí a
+etiqueta, em vez de fingir precisão.
+
+`kind` separa **`interactive`** (alguém digitando num terminal) de **`headless`**
+(`-p`/`--print` — é o que o chat *deste painel* dispara a cada mensagem). Sem isso os
+próprios processos do painel apareciam como "sessão aberta num terminal".
+
+> **Por que isso importa.** O aviso "esta conversa está aberta num terminal" era disparado
+> pelo palpite. Criar uma conversa pelo navegador torna o `.jsonl` dela o mais recente da
+> pasta — então o terminal que estava ali virava "dono" da conversa recém-criada, e a
+> interface avisava sobre um conflito que não existia. Hoje **só `args` avisa**: sem
+> certeza a interface fica calada, nem com um aviso hedged ("tem um Claude nesta pasta"),
+> que foi tentado e removido por ser barulho. Ver [06 · Interface](06-interface.md).
+>
+> Consequência aceita: um `claude` cru num terminal **nunca** dispara o aviso. Preferimos
+> não avisar a avisar errado — quem quiser a proteção abre o terminal com
+> `claude --resume <id>`.
 
 `q` filtra por PID, tty, `cwd`, comando e id da conversa, ignorando acentos e
 maiúsculas.
@@ -187,8 +213,11 @@ A janela é contada **do fim para o começo**, como um feed:
 - `before` maior que `total` é tratado como o fim; `before=0` devolve lista vazia
   com `hasMore: false`;
 - cada mensagem tem `index` estável dentro do arquivo;
-- cada conversa traz `contextTokens` (uso do último turno) e `contextWindow`
-  (janela inferida) — base do medidor de contexto na interface. Logo após um
+- cada conversa traz `contextTokens` (uso do último turno), `contextWindow` (a
+  janela do modelo) e `contextWindowSource` (`"api"` ou `"guess"`) — base do medidor
+  de contexto na interface. A janela vem do [catálogo de modelos](#modelos-models);
+  `"guess"` significa que o catálogo não estava disponível e o número é palpite, e
+  aí a interface **diz** isso em vez de mostrá-lo como fato. Logo após um
   `/compact`, a CLI grava um turno `<synthetic>` com uso zerado; nesse caso
   `contextTokens` vem `null` e `contextNote` = "compactado — recalcula ao enviar"
   (mostrar `0` enganaria — o tamanho real só é medido no próximo turno);
@@ -273,6 +302,67 @@ curl -s "localhost:7788/api/fs?path=/home/fernando/www"
 ```
 
 Só diretórios, em ordem alfabética; pastas ocultas (começando com `.`) ficam de fora.
+
+## Modelos (`models`)
+
+Catálogo vindo de `GET https://api.anthropic.com/v1/models`, em cache em
+`data/models.json`. **É o único ponto do app que faz chamada de rede externa.**
+
+| Método | Rota | O quê |
+| --- | --- | --- |
+| GET | `/api/models` | catálogo (busca da API se o cache venceu): `{ fetchedAt, models, stale }` |
+| POST | `/api/models/refresh` | força a busca e regrava o cache |
+| GET | `/api/models/:id` | um modelo pelo id |
+
+```bash
+curl -s localhost:7788/api/models | head -20
+```
+
+```json
+{
+  "fetchedAt": "2026-08-24T19:32:15.359Z",
+  "source": "api",
+  "stale": false,
+  "models": [
+    { "id": "claude-opus-5", "displayName": "Claude Opus 5",
+      "createdAt": "2026-07-24T00:00:00Z",
+      "maxInputTokens": 1000000, "maxOutputTokens": 128000 }
+  ]
+}
+```
+
+### Por que isto existe
+
+A janela de contexto **não está no transcript**. Ela era adivinhada pelo nome do
+modelo (`/\[1m\]/.test(model) || tokens > 200_000 ? 1M : 200k`), e `claude-opus-5`
+não tem sufixo `[1m]` — então o medidor mostrava **200k numa conversa de 1M**, em
+praticamente toda conversa. Agora sai de `max_input_tokens` da API.
+
+**O campo é `max_input_tokens`, não `context_window`** — esse campo não existe na
+resposta. `max_tokens` é o teto de *saída*, não a janela.
+
+### Detalhes que custaram um teste cada
+
+- **A API responde 404 para alias e para variante.** `GET /v1/models/opus` e
+  `GET /v1/models/claude-opus-5[1m]` falham, mas o transcript grava exatamente
+  essas formas. Por isso buscamos a **lista** (10 modelos, uma requisição) e o
+  casamento acontece no `core/claude-models.js`: sufixo `[…]`/`-fast` é removido, e
+  alias (`opus`, `sonnet`, `haiku`, `fable`) resolve para o **mais novo** daquela
+  família — que é o que o alias significa;
+- `<synthetic>` (o turno que o `/compact` grava) não é modelo e não resolve nada;
+- **TTL de 24 h.** O catálogo muda em lançamento, não por hora. Se a busca falhar e
+  houver cache, a resposta vem com `stale: true` e o motivo em `error` — dado velho
+  e sinalizado é melhor que tela vazia;
+- **o caminho de leitura nunca chama a rede.** Listar conversas só lê o cache
+  (`readCatalogCache()` no core); quem busca é este serviço. Sem cache, a janela cai
+  no palpite antigo e vem marcada como `"guess"`.
+
+### Autenticação
+
+Ordem: `ANTHROPIC_API_KEY` (cabeçalho `x-api-key`) → a credencial do CLI já logado
+nesta máquina (`~/.claude/.credentials.json` → `Authorization: Bearer` + o cabeçalho
+`anthropic-beta: oauth-2025-04-20`, que o token OAuth exige). Sem nenhuma das duas,
+a rota responde 409 dizendo o que fazer, e o resto do app segue funcionando.
 
 ## Configurações (`settings`)
 

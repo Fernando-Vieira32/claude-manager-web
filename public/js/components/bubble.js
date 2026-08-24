@@ -31,12 +31,22 @@ export function messageBubble({ role = 'assistant', text = '', at, who, badge, i
   return el('div', { class: `msg ${role}` },
     el('div', { class: 'who' },
       `${who || WHO[role] || role}${at ? ` · ${fmt.when(at)}` : ''}`,
-      badge ? el('span', { class: 'chip' }, badge) : null),
+      badge ? el('span', { class: 'chip bubble-badge' }, badge) : null),
     images && images.length
       ? el('div', { class: 'msg-imgs' }, ...images.map((src) => el('img', { class: 'msg-img', src, alt: 'imagem enviada' })))
       : null,
     text ? el('pre', {}, text) : null,
     calls.length ? el('div', { class: 'bubble-extras' }, ...calls) : null);
+}
+
+/**
+ * Tira a etiqueta de uma bolha já montada — usado quando a mensagem sai da fila e
+ * começa a ser enviada de verdade. Fica aqui porque a marcação da etiqueta é
+ * conhecimento desta peça; quem chama não deve cutucar o DOM dela.
+ */
+export function clearBadge(node) {
+  node?.querySelector('.bubble-badge')?.remove();
+  return node;
 }
 
 /**

@@ -17,7 +17,8 @@ public/js/components/
   feed.js         lista paginada que cresce para cima (histórico, logs)
   bubble.js       bolha de mensagem estática e bolha de streaming
   composer.js     caixa de escrever com campos de opção e enviar/parar
-  chat.js         feed + composer + protocolo de stream = vista de conversa
+  chat.js         feed + composer + fila de envio = vista de conversa
+  stream-sink.js  traduz os eventos do stream em chamadas na bolha viva
   conversation-window.js  a janela de uma conversa (floating-window + chat + medidor + cor)
   data-table.js   tabela declarativa por colunas
   activity.js     indicador vivo "algo está acontecendo" (pulso + tempo + barra)
@@ -32,6 +33,7 @@ public/js/components/
   floating-window.js  janela flutuante arrastável/redimensionável (não-modal)
   color-picker.js   botão + paleta de cores (amostras + cor livre)
   quick-replies.js  botões de resposta rápida (opções detectadas na pergunta)
+  source-tag.js     valor + procedência (certeza x palpite)
   server-status.js  status do servidor (verde/vermelho) + reiniciar/desligar
 ```
 
@@ -81,7 +83,13 @@ commits depois.
 ```js
 messageBubble({ role: 'user', text, at, badge });          // → Node
 messageBubble(msgDaApi);   // com `tools`, já monta os chips de ferramenta resolvidos
+clearBadge(node);          // tira a etiqueta de uma bolha já montada → o próprio node
 ```
+
+`clearBadge` existe para a fila do [`chat`](#chatjs): a mensagem entra na tela com
+`badge: 'na fila'` e, quando chega a vez dela, perde a etiqueta **na mesma bolha**. A
+função vive aqui porque a marcação (`.bubble-badge`) é conhecimento desta peça — quem
+usa não deve cutucar o DOM dela.
 
 ```js
 const b = streamBubble({ role: 'assistant' });      // → controles
@@ -96,6 +104,55 @@ b.finish('$0.0116 · 1 turno'); // encerra o estado "digitando"
 ```
 
 Quem consome um stream nunca toca no DOM: só chama esses métodos.
+
+## `stream-sink.js`
+
+Pega um evento do stream e mexe na bolha. É só isso — e é o suficiente para tirar 70
+linhas de `switch` de dentro do `chat.js`.
+
+```js
+const onEvent = createStreamSink({
+  bubble,                                  // uma instância de streamBubble
+  onHint: (t) => composer.setHint(t),      // "modo: …", "$0.0116 · 2 turno(s)"
+  onScroll: () => feed.scrollToEnd(),      // cresceu; quem rola decide se acompanha
+});
+onEvent({ type: 'delta', text: 'oi' });
+```
+
+Devolve **uma função** (o próprio `onEvent`), então entra direto no transporte. Não
+conhece composer, feed, painel nem rota: só a bolha e dois callbacks. Guarda um único
+pedaço de estado — se já houve `delta` — porque depois de uma ferramenta o rótulo tem de
+voltar de "usando Bash…" para "escrevendo…". Evento de tipo desconhecido é ignorado de
+propósito: o contrato ([readme/10](10-chat.md)) pode crescer sem quebrar a tela.
+
+Reaproveitável em qualquer lugar que mostre resposta chegando — o editor explicando um
+arquivo, um agente rodando em segundo plano.
+
+## `source-tag.js`
+
+Mostra um valor **e de onde ele veio**. Fábrica de nó (como o `messageBubble`): sem
+estado, sem listener, sem `destroy()`.
+
+```js
+meta.append(sourceTag({ text: `conversa ${id.slice(0, 8)}…` }));                 // certeza
+meta.append(sourceTag({
+  text: `conversa ${id.slice(0, 8)}…`,
+  certain: false,                          // esmaece e escreve "(palpite)"
+  title: 'por que é palpite, em uma frase',
+}));
+```
+
+Existe porque "este dado é palpite" **já aparece em mais de um lugar**: a janela de
+contexto (vinda da API x estimada pelo nome do modelo) e a conversa de uma sessão
+(declarada no comando x deduzida pelo arquivo mais recente da pasta). Sem uma peça só,
+cada painel inventava a sua marcação — que é exatamente o tombo já registrado no
+`CLAUDE.md` ("o mesmo controle renderizado de dois jeitos").
+
+> **Dívida declarada:** o [`context-meter`](#context-meterjs) ainda marca o palpite por
+> conta própria, com o parâmetro `note` (texto livre que o painel passa). Não foi
+> convertido nesta rodada de propósito — mexer no contrato dele é mexer num caminho que
+> funciona, e isso pede uma alteração própria, não um efeito colateral. Quando for
+> convertido, o `note` vira `sourceTag` e a marcação passa a ser única.
 
 ## `composer.js`
 
@@ -115,11 +172,26 @@ const composer = createComposer({
   submitOnEnter: true,                   // Enter envia, Shift+Enter quebra linha
 });
 footer.append(composer.node);
-composer.setBusy(true);                  // trava enquanto responde
+composer.setBusy(true);                  // "respondendo": NÃO trava, só avisa
+composer.setLocked(true, 'compactando…'); // trava de verdade (outra operação)
 composer.setHint('$0.0116 · 1 turno');   // rodapé à direita
 composer.setNotice('aviso importante');  // faixa amarela acima
 composer.focus();
 ```
+
+### `setBusy` não trava — `setLocked` trava
+
+São duas coisas diferentes, e confundi-las foi bug:
+
+| | o que faz | quando usar |
+| --- | --- | --- |
+| `setBusy(true)` | botão vira **"Enfileirar"**, aparece "Parar". A caixa **continua escrevível** | enquanto uma resposta corre — quem serializa é o [`chat`](#chatjs), que enfileira |
+| `setLocked(true, motivo)` | `disabled` na caixa e no botão; `motivo` vira o placeholder | operação que mexe na conversa e **não** aceita fila (hoje só `/compact`) |
+
+Antes o `setBusy` fazia `input.disabled = true`, e o resultado era o oposto do
+terminal: durante a resposta você ficava de mãos atadas, sem poder nem digitar a
+próxima mensagem. Se você precisa impedir o envio, é `setLocked` — e aí diga o
+porquê no `motivo`, senão o usuário só vê uma caixa morta.
 
 Amanhã serve para mensagem de commit, prompt do editor ou caixa de comando — muda
 só `fields` e `onSubmit`.
@@ -153,6 +225,22 @@ reaproveita esta vista inteira. `mountChat(container, chat)` monta fora do drawe
 `submit(text, images)` envia por código pelo **mesmo** caminho do clique em "Enviar" (é
 o que as respostas rápidas já usavam por dentro). Serve para abrir a vista já com a
 primeira mensagem em mão — é assim que a tela de nova conversa manda a primeira.
+
+### A fila (uma resposta por vez, sem travar a caixa)
+
+Como no terminal: você digita durante a resposta e a mensagem **espera a vez**.
+
+- mandar com uma resposta em andamento **enfileira**: a bolha já aparece na tela com a
+  etiqueta `na fila` (é o `badge` do [`bubble`](#bubblejs));
+- quando a resposta atual termina, o `chat` tira a etiqueta daquela bolha — não cria uma
+  segunda — e manda. Nunca há dois streams ao mesmo tempo na mesma conversa;
+- enquanto sobrar item na fila o botão continua "Enfileirar"; ele só volta a "Enviar"
+  quando a fila esvazia (senão o rótulo piscava entre uma mensagem e a outra);
+- `destroy()` **descarta a fila**: fechar a janela não continua mandando mensagem que
+  você não vai ver.
+
+Quem precisa de fato bloquear a escrita usa `chat.composer.setLocked(...)` — ver a
+tabela em [`composer`](#composerjs).
 
 ## `conversation-window.js`
 
@@ -191,7 +279,15 @@ Três coisas que valem saber:
   outra. `openConversationWindow(id)` responde se já existe. Se o registro ficasse no
   painel, abrir por um caminho e depois pelo outro daria duas janelas da mesma conversa;
 - **`setId(id)`** existe para a conversa que ainda vai nascer: quem inicia só descobre o
-  id no evento `init`, e é esse registro que impede a segunda janela depois;
+  id no evento `init`, e é esse registro que impede a segunda janela depois. **Só registra
+  se a janela ainda está aberta** (`win.isOpen()`) — ver o fantasma abaixo;
+- **o registro não guarda fantasma.** Fechar a janela **não** aborta o stream, então o
+  `init` pode chegar *depois* do fechamento. Registrar aí deixava uma janela fechada
+  marcada como "aberta", e `focus()` em janela fechada só mexe no `z-index`: o clique em
+  **"Ler" não abria nada**. Hoje há duas guardas (de propósito redundantes): `setId` não
+  registra janela fechada, e `openConversationWindow` descarta a entrada quando a janela
+  não está mais na tela. Reproduzir: criar pela tela de nova conversa, **fechar antes da
+  primeira resposta chegar**, e depois clicar em "Ler" na lista;
 - **`setHeader({ … })` mescla.** O total de mensagens chega pelo feed e o modelo pode só
   ser conhecido depois; atualizar um não apaga o outro.
 
@@ -476,6 +572,7 @@ win.attach && chat.attach(win.scroller());
 win.setSubtitle('20 de 262');      // atualiza sem redesenhar
 win.setAccent('#3b82f6');          // tinge borda + cabeçalho ('' remove o realce)
 win.focus();                        // traz para a frente
+win.isOpen();                       // ainda está na tela?
 win.close();                        // fecha (dispara onClose)
 ```
 

@@ -79,11 +79,14 @@ export function createComposer({
   const values = () => Object.fromEntries([...controls].map(([k, c]) => [k, c.value()]));
 
   let busy = false;
+  let locked = false;
 
   async function fire() {
     const text = input.value.trim();
     const images = tray ? tray.items() : [];
-    if ((!text && !images.length) || busy) return;
+    // `busy` não impede: enviar durante uma resposta é permitido (vira fila).
+    // `locked` impede: é outra operação mexendo na conversa (ex.: /compact).
+    if (locked || (!text && !images.length)) return;
     input.value = '';
     tray?.clear();
     await onSubmit?.(text, values(), images);
@@ -109,14 +112,30 @@ export function createComposer({
     values,
 
     /** Trava a caixa enquanto uma resposta está em andamento. */
+    /**
+     * Marca "respondendo". **Não trava a caixa**: no terminal você digita durante a
+     * resposta e a mensagem espera a vez, e aqui é igual — quem serializa é o
+     * `chat`, que enfileira. Antes isto fazia `input.disabled = true` e você ficava
+     * de mãos atadas até a resposta acabar.
+     */
     setBusy(value) {
       busy = value;
+      submit.textContent = value ? 'Enfileirar' : label;
+      if (onStop) stop.hidden = !value;
+      return api;
+    },
+
+    /**
+     * Trava de verdade — some com a possibilidade de escrever. É para operação que
+     * mexe na conversa e não aceita fila (hoje: `/compact`). Não confundir com
+     * `setBusy`, que só sinaliza "respondendo".
+     */
+    setLocked(value, reason = '') {
+      locked = value;
       input.disabled = value;
       submit.disabled = value;
-      submit.textContent = value ? 'Enviando…' : label;
-      controls.forEach((c) => c.setDisabled(value));
-      tray?.setDisabled(value);
-      if (onStop) stop.hidden = !value;
+      if (reason) input.placeholder = reason;
+      else input.placeholder = placeholder;
       return api;
     },
 

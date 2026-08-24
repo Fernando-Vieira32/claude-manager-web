@@ -240,6 +240,12 @@ o indicador vivo ([`activity.js`](11-componentes.md#activityjs)): bolinha pulsan
 barra indeterminada e **tempo decorrido**. Ao terminar, o toast dá o feedback honesto
 que interessa — o antes→depois, ex.: `269k → 41k (−85%)`.
 
+Enquanto compacta, a caixa de escrever fica **travada de verdade**
+(`composer.setLocked(true, 'compactando…')`) — e o placeholder diz o porquê. Essa é a
+diferença entre travar e "estar respondendo": mensagem durante uma resposta vai para a
+fila, mas durante o `/compact` não há fila, porque o histórico está sendo reescrito
+debaixo dela. Ver a tabela em [`composer`](11-componentes.md#composerjs).
+
 O tamanho do contexto (ex.: `contexto 258k / 1M`) vem do campo `usage` do último
 turno do assistant no transcript: `input_tokens + cache_read + cache_creation`. A
 janela é inferida (200k, ou 1M quando o uso já passou de 200k) porque o transcript
@@ -250,7 +256,10 @@ serviço que emita os mesmos eventos reaproveita a interface inteira.
 
 ## Proteções
 
-- **uma execução por conversa**: pedir outra enquanto uma responde devolve 409;
+- **uma execução por conversa**: pedir outra enquanto uma responde devolve 409. No
+  navegador você não bate nesse 409 escrevendo: a caixa **não trava** durante a resposta
+  (como no terminal) e a mensagem entra na **fila** do
+  [`chat`](11-componentes.md#chatjs), que só a manda quando a atual termina;
 - **fechar a janela NÃO mata o processo**: cada conversa abre numa
   [janela flutuante](11-componentes.md#floating-windowjs); fechá-la destrói o chat com
   `abort: false`, então a resposta em andamento **termina em segundo plano** (grava no
@@ -260,8 +269,10 @@ serviço que emita os mesmos eventos reaproveita a interface inteira.
   manda `SIGTERM`, sem deixar órfãos;
 - **timeout** vindo das variáveis acima (e **teto de gasto** opcional, se você definir
   `CHAT_MAX_USD` — desligado por padrão);
-- **aviso de conflito**: se um terminal parece estar com essa conversa aberta, uma
-  faixa amarela avisa antes de você escrever (os dois gravam no mesmo arquivo);
+- **aviso de conflito**: se um terminal está com essa conversa aberta **e dá para provar**
+  (o comando dele traz `--resume <este id>`), uma faixa amarela avisa antes de você
+  escrever (os dois gravam no mesmo arquivo). Sem prova, nada é dito — ver
+  [06 · Interface](06-interface.md);
 - erros de validação viram evento `error` no stream (o HTTP já respondeu 200 ao
   abrir o SSE), então a interface sempre mostra a razão.
 
@@ -289,5 +300,7 @@ como o terminal — sem trava artificial de dólar.
   terminal, a execução simplesmente segue com o que o modo permite;
 - **um turno por envio**: cada mensagem é um `-p` completo; não há sessão persistida
   em memória entre envios (o estado vive no `.jsonl`, o que é justamente o ponto);
+- **a fila é do navegador, não do servidor**: mensagem enfileirada vive na aba. Fechar a
+  janela (ou a aba) descarta o que ainda não saiu — o que já foi enviado continua;
 - **`--fork-session` não é usado**: continuar sempre grava na mesma conversa. Se
   quiser "ramificar", é um campo novo no composer e a flag no `args` — 3 linhas.

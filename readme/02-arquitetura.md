@@ -21,6 +21,7 @@ core/
   static.js              serve public/ com mime types
   claude-paths.js        o que se sabe sobre ~/.claude (layout, ids, fold de acentos)
   claude-blocks.js       o que se sabe sobre os blocos de mensagem (texto, ferramenta, imagem)
+  claude-models.js       casa o id do transcript com o catálogo e lê o cache de modelos
 services/
   sessions/service.js    MANIFESTO (id, basePath, routes)
   sessions/repo.js       regra de negócio: ps, /proc, kill
@@ -34,8 +35,11 @@ services/
   fs/repo.js             navegação de pastas (escolher onde a conversa roda)
   settings/service.js
   settings/repo.js       preferências chave/valor: global e por conversa, em arquivo
+  models/service.js
+  models/repo.js         catálogo da API (janela de contexto) — o ÚNICO que sai na rede
 data/
   settings.json          config global do app (1 arquivo); criado sozinho, fora do git
+  models.json            catálogo de modelos em cache (vem da API); fora do git
   conversas/             1 arquivo JSON por conversa (config); criado sozinho, fora do git
 test/
   *.test.js              suíte do `node --test` (npm test) — sem dependências
@@ -49,7 +53,8 @@ public/
   js/core/ui.js          el(), fmt, toast, confirmAction, drawer, states
   js/core/chat-fields.js opções de modo e modelo (compartilhadas entre painéis)
   js/core/detect-options.js  detecta pergunta+opções (respostas rápidas)
-  js/components/*.js     peças reutilizáveis: feed, bubble, composer, chat, floating-window…
+  js/components/*.js     peças reutilizáveis: feed, bubble, composer, chat, stream-sink,
+                         source-tag, floating-window…
   js/core/app.js         registra painéis, navegação, busca, tema, health
   js/panels/index.js     MANIFESTO dos painéis
   js/panels/*.js         um arquivo por painel
@@ -88,8 +93,9 @@ Log do boot:
 [registry] serviço "chat" em /api/chat (6 rotas)
 [registry] serviço "conversations" em /api/conversations (7 rotas)
 [registry] serviço "fs" em /api/fs (1 rotas)
+[registry] serviço "models" em /api/models (3 rotas)
 [registry] serviço "sessions" em /api/sessions (2 rotas)
-[registry] serviço "settings" em /api/settings (5 rotas)
+[registry] serviço "settings" em /api/settings (6 rotas)
 ```
 
 Se um serviço não aparecer nessa lista, ele não foi carregado — confira o nome do

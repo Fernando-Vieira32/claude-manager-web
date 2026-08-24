@@ -1,5 +1,26 @@
 import { api } from '../core/api.js';
 import { el, fmt, toast, confirmAction, states } from '../core/ui.js';
+import { sourceTag } from '../components/source-tag.js';
+
+/**
+ * Qual conversa esta sessão está usando — dizendo se é certeza ou palpite. O
+ * Claude não deixa o transcript aberto num descritor, então só há certeza quando
+ * o próprio comando traz `--resume <id>`. Mostrar palpite sem etiqueta fazia a
+ * interface afirmar o que não sabe (ver readme/03-api.md).
+ */
+function conversaDaSessao(s) {
+  if (!s.conversationId) return null;
+  const texto = `conversa ${s.conversationId.slice(0, 8)}…`;
+  const certeza = s.conversationSource === 'args';
+  return sourceTag({
+    text: texto,
+    certain: certeza,
+    title: certeza
+      ? `conversa ${s.conversationId} (declarada no comando)`
+      : `palpite: ${s.conversationId} é a conversa modificada mais recentemente nesta pasta.`
+        + ' Não há como saber por fora em qual conversa um terminal está.',
+  });
+}
 
 export default {
   id: 'sessions',
@@ -55,14 +76,17 @@ export default {
           el('div', { class: 'card-title' },
             el('span', { class: 'chip accent' }, `PID ${s.pid}`),
             ' ',
-            el('span', { class: 'code' }, s.cwd || 'pasta desconhecida')),
+            el('span', { class: 'code' }, s.cwd || 'pasta desconhecida'),
+            s.kind === 'headless'
+              ? el('span', {
+                  class: 'chip',
+                  title: 'rodando com -p (sem terminal) — é assim que o chat deste painel executa',
+                }, 'headless')
+              : null),
           el('div', { class: 'meta' },
             el('span', {}, `tty ${s.tty || '—'}`),
             el('span', {}, `ativa há ${s.uptime}`),
-            s.conversationId
-              ? el('span', { class: 'mono', title: 'conversa provável (arquivo mais recente do projeto)' },
-                  `conversa ${s.conversationId.slice(0, 8)}…`)
-              : null)),
+            conversaDaSessao(s))),
         el('div', { class: 'actions' },
           el('button', {
             class: 'btn small',

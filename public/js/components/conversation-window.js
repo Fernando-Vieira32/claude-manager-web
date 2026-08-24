@@ -27,8 +27,20 @@ import { createFloatingWindow } from './floating-window.js';
 // lista e depois pela tela de nova conversa daria duas janelas da mesma conversa.
 const abertas = new Map();
 
-/** Já existe janela desta conversa? Devolve a instância (ou undefined). */
-export const openConversationWindow = (id) => abertas.get(id);
+/**
+ * Já existe janela desta conversa **na tela**? Devolve a instância (ou undefined).
+ *
+ * O registro se limpa sozinho: uma janela fechada que sobrou aqui viraria um
+ * fantasma, e `focus()` em janela fechada não mostra nada — o clique em "Ler"
+ * simplesmente não abria nada.
+ */
+export function openConversationWindow(id) {
+  const janela = abertas.get(id);
+  if (!janela) return undefined;
+  if (janela.win.isOpen()) return janela;
+  abertas.delete(id);
+  return undefined;
+}
 
 export function createConversationWindow({
   id = null,
@@ -49,7 +61,7 @@ export function createConversationWindow({
   onFinish,
   onClose,
 } = {}) {
-  const existente = id && abertas.get(id);
+  const existente = id ? openConversationWindow(id) : null;
   if (existente) {
     existente.focus();
     return existente;
@@ -129,11 +141,15 @@ export function createConversationWindow({
     /**
      * A conversa nasceu agora e só temos o id depois do primeiro `init`. Registrar
      * aqui é o que impede uma segunda janela quando ela aparecer na lista.
+     *
+     * Só registra se a janela ainda está na tela: fechar **não** aborta o stream,
+     * então o `init` pode chegar depois do fechamento — e registrar aí deixava um
+     * fantasma que fazia "Ler" não abrir nada.
      */
     setId(novo) {
       if (!novo || api.id === novo) return api;
       api.id = novo;
-      abertas.set(novo, api);
+      if (win.isOpen()) abertas.set(novo, api);
       return api;
     },
 

@@ -135,6 +135,14 @@ export const api = {
     remove: (id) => api.del(`/api/settings/${encodeURIComponent(id)}`),
   },
 
+  // catálogo de modelos: é dele que sai a janela de contexto real
+  models: {
+    /** `{ fetchedAt, models, stale }` — busca da API se o cache venceu. */
+    list: () => api.get('/api/models'),
+    /** Força a busca na API e regrava o cache. */
+    refresh: () => api.post('/api/models/refresh'),
+  },
+
   meta: {
     services: () => api.get('/api/_services'),
     health: () => api.get('/api/_health'),

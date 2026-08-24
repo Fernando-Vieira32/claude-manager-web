@@ -16,6 +16,19 @@ const WINDOW_COLORS = ['#ff6a45', '#ff4f8b', '#a855f7', '#3b82f6', '#06b6d4', '#
 // torto no arquivo de config não pode virar declaração de estilo solta.
 const HEX = /^#[0-9a-fA-F]{3,8}$/;
 
+/**
+ * Estado do medidor de contexto. A janela vem do catálogo da API; quando o
+ * catálogo não está disponível o servidor devolve um palpite, e aí a tela DIZ
+ * que é palpite em vez de exibir um número com cara de verdade.
+ */
+const contextOf = (c) => ({
+  tokens: c.contextTokens,
+  window: c.contextWindow,
+  note: c.contextWindowSource === 'guess'
+    ? 'janela estimada (catálogo de modelos indisponível)'
+    : c.contextNote,
+});
+
 /** `[{ id, settings }]` -> Map(id -> cor), só das conversas com cor válida. */
 const colorsOf = (items) => new Map(items
   .filter((s) => HEX.test(s.settings?.color || ''))
@@ -155,7 +168,7 @@ export default {
         project: c.project,
         bytes: c.bytes,
         model: c.model,
-        context: { tokens: c.contextTokens, window: c.contextWindow, note: c.contextNote },
+        context: contextOf(c),
         settings: saved,
         modeChoices: MODE_CHOICES,
         modelChoices: MODEL_CHOICES,
@@ -189,16 +202,25 @@ export default {
       warnIfBusy(c, janela.chat);
     }
 
-    /** Avisa se um terminal parece estar com esta conversa aberta. */
+    /**
+     * Avisa **só quando é esta conversa, com certeza**: um terminal rodando
+     * `claude --resume <este id>`. Nada de "tem um Claude na pasta": pasta não é
+     * conversa, e aviso que não dá para confirmar é barulho — aparecia até em
+     * conversa que o navegador acabou de criar.
+     */
     async function warnIfBusy(c, chat) {
       try {
         const { items } = await api.sessions.list();
-        const live = items.find((s) => s.conversationId === c.sessionId);
-        if (live) {
-          chat.notice(
-            `Esta conversa parece estar aberta num terminal (PID ${live.pid}, ${live.tty || 'sem tty'}). `
-            + 'Enviar daqui grava no mesmo arquivo — evite escrever nos dois ao mesmo tempo.');
-        }
+        // headless é execução deste painel (`claude -p`), não gente digitando —
+        // e conflito nosso com o nosso já é barrado pelo 409 do serviço de chat
+        const mesma = items.find((s) => s.kind !== 'headless'
+          && s.conversationSource === 'args'
+          && s.conversationId === c.sessionId);
+        if (!mesma) return;
+
+        chat.notice(
+          `Esta conversa está aberta num terminal (PID ${mesma.pid}, ${mesma.tty || 'sem tty'}). `
+          + 'Enviar daqui grava no mesmo arquivo — evite escrever nos dois ao mesmo tempo.', 'warn');
       } catch { /* aviso é bônus, não bloqueia */ }
     }
 
@@ -210,8 +232,9 @@ export default {
         const { meta } = await api.conversations.read(c.id, { limit: 1 });
         c.contextTokens = meta.contextTokens;
         c.contextWindow = meta.contextWindow;
+        c.contextWindowSource = meta.contextWindowSource;
         c.contextNote = meta.contextNote;
-        meter.set({ tokens: meta.contextTokens, window: meta.contextWindow, note: meta.contextNote });
+        meter.set(contextOf(meta));
         return meta.contextTokens;
       } catch {
         return null; /* medidor é informativo, não bloqueia */
@@ -231,7 +254,7 @@ export default {
 
       const before = meter.tokens();
       meter.setBusy(true);
-      chat.composer.setBusy(true);
+      chat.composer.setLocked(true, 'compactando… aguarde para escrever');
       let failed = null;
 
       try {
@@ -244,7 +267,7 @@ export default {
       }
 
       meter.setBusy(false);
-      chat.composer.setBusy(false);
+      chat.composer.setLocked(false);
 
       if (failed) {
         toast(`Não deu para compactar: ${failed}`, { type: 'err' });

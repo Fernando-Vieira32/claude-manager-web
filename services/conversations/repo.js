@@ -5,6 +5,7 @@ import path from 'node:path';
 import { config } from '../../core/config.js';
 import { fold, resolveConversationId } from '../../core/claude-paths.js';
 import { toolFromUse, toolResultFrom } from '../../core/claude-blocks.js';
+import { contextWindowOf, readCatalogCache } from '../../core/claude-models.js';
 import { localStamp } from './trash.js';
 import { badRequest, notFound } from '../../core/http.js';
 
@@ -53,7 +54,7 @@ async function parseFile(file) {
   return entries;
 }
 
-async function summarize(file, projectDir, stat) {
+async function summarize(file, projectDir, stat, catalogo = []) {
   const entries = await parseFile(file);
   let cwd = '';
   let title = '';
@@ -93,7 +94,7 @@ async function summarize(file, projectDir, stat) {
   }
 
   const label = cwd || path.basename(projectDir);
-  const context = contextFromUsage(lastUsage, model);
+  const context = contextFromUsage(lastUsage, model, catalogo);
   return {
     id: makeId(projectDir, path.basename(file)),
     sessionId: path.basename(file, '.jsonl'),
@@ -110,16 +111,18 @@ async function summarize(file, projectDir, stat) {
     model,
     contextTokens: context.tokens,
     contextWindow: context.window,
+    contextWindowSource: context.windowSource || null,
     contextNote: context.note || null,
   };
 }
 
 /**
  * Tokens em contexto no último turno = entrada + o que foi lido/criado em cache.
- * A janela do modelo não vem no transcript; inferimos de forma conservadora
- * (200k, ou 1M quando o uso já passou de 200k — sessões de contexto estendido).
+ * A janela NÃO vem no transcript: vem do catálogo da API (`max_input_tokens`),
+ * em cache no disco. Sem catálogo, cai num palpite pelo nome — que erra, e por
+ * isso vem marcado em `windowSource`.
  */
-function contextFromUsage(usage, model) {
+function contextFromUsage(usage, model, catalogo) {
   if (!usage) return { tokens: null, window: null };
   const tokens = (usage.input_tokens || 0)
     + (usage.cache_read_input_tokens || 0)
@@ -128,8 +131,16 @@ function contextFromUsage(usage, model) {
   // (o resumo). Nesse caso o contexto real ainda não foi medido — só será no
   // próximo turno. Mostrar 0 engana; mostramos "desconhecido" com uma nota.
   if (!tokens) return { tokens: null, window: null, note: 'compactado — recalcula ao enviar' };
+
+  // Janela DE VERDADE, do catálogo da API (`max_input_tokens`).
+  const daApi = contextWindowOf(catalogo, model);
+  if (daApi) return { tokens, window: daApi, windowSource: 'api' };
+
+  // Sem catálogo (primeiro boot, offline, sem credencial) sobra o palpite antigo:
+  // olhar o nome. Ele erra — `claude-opus-5` é 1M e não tem sufixo `[1m]` — então
+  // o número vem marcado como palpite para a interface poder dizer isso.
   const big = /\[1m\]|-1m\b/i.test(model || '') || tokens > 200_000;
-  return { tokens, window: big ? 1_000_000 : 200_000 };
+  return { tokens, window: big ? 1_000_000 : 200_000, windowSource: 'guess' };
 }
 
 export async function listConversations({ q = '' } = {}) {
@@ -139,6 +150,9 @@ export async function listConversations({ q = '' } = {}) {
   } catch {
     return [];
   }
+
+  // um catálogo por listagem: a janela é a mesma para todas as conversas
+  const catalogo = await readCatalogCache();
 
   const items = [];
   for (const dir of projects.filter((d) => d.isDirectory())) {
@@ -155,14 +169,16 @@ export async function listConversations({ q = '' } = {}) {
         stat = await fs.stat(file);
       } catch { continue; }
 
+      // o cache também depende do catálogo: se ele foi atualizado, a janela
+      // gravada no resumo está velha e o resumo precisa ser refeito
       const hit = cache.get(file);
-      if (hit && hit.mtimeMs === stat.mtimeMs) {
+      if (hit && hit.mtimeMs === stat.mtimeMs && hit.catalogAt === catalogo.fetchedAt) {
         items.push(hit.summary);
         continue;
       }
       try {
-        const summary = await summarize(file, dir.name, stat);
-        cache.set(file, { mtimeMs: stat.mtimeMs, summary });
+        const summary = await summarize(file, dir.name, stat, catalogo.models);
+        cache.set(file, { mtimeMs: stat.mtimeMs, catalogAt: catalogo.fetchedAt, summary });
         items.push(summary);
       } catch { /* arquivo ilegível: pula */ }
     }
@@ -269,7 +285,7 @@ export async function getConversation(id, { limit = 20, before } = {}) {
   const start = Math.max(0, end - size);
 
   return {
-    meta: await summarize(file, projectDir, stat),
+    meta: await summarize(file, projectDir, stat, (await readCatalogCache()).models),
     total,
     from: start,
     to: end,
