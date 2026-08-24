@@ -21,7 +21,9 @@ import { fmt } from '../core/ui.js';
 import { createChat } from './chat.js';
 import { createContextMeter } from './context-meter.js';
 import { createColorPicker } from './color-picker.js';
+import { createToggleText } from './toggle-text.js';
 import { createFloatingWindow } from './floating-window.js';
+import { applySuffix } from '../core/message-suffix.js';
 
 // Uma janela por conversa. O registro vive AQUI, e não no painel, senão abrir pela
 // lista e depois pela tela de nova conversa daria duas janelas da mesma conversa.
@@ -79,11 +81,26 @@ export function createConversationWindow({
   const meter = createContextMeter({ onCompact: () => onCompact?.(api) });
   if (context) meter.set(context);
 
+  // Frase fixa do fim da mensagem: preferência DESTA conversa (fica no arquivo de
+  // configuração dela, como a cor e o modo). O componente só guarda e avisa; quem
+  // aplica é a regra pura do `core/message-suffix.js`.
+  const sufixo = createToggleText({
+    label: 'frase',
+    value: settings.suffix || '',
+    enabled: settings.suffixOn === true || settings.suffixOn === 'true',
+    placeholder: 'ex.: Responda sempre em português e em tópicos.',
+    hint: 'vai no fim de toda mensagem que você mandar nesta conversa',
+    title: 'Frase fixa no fim das mensagens',
+    onChange: ({ value, enabled }) => save({ suffix: value, suffixOn: enabled }),
+  });
+
   const chat = createChat({
     pageSize: 20,
     fetchPage,
     send,
     onStop: stop,
+    // o texto que aparece na bolha é o mesmo que vai para o servidor
+    beforeSend: (text) => applySuffix(text, sufixo.state()),
     fields: [
       {
         name: 'mode',
@@ -118,12 +135,13 @@ export function createConversationWindow({
   win = createFloatingWindow({
     title: String(title).slice(0, 70),
     subtitle: subtitle(header),
-    actions: [colorPicker.node],
+    actions: [sufixo.node, colorPicker.node],
     onClose: () => {
       if (api.id) abertas.delete(api.id);
       chat.destroy({ abort: false });   // fechar não interrompe a resposta em curso
       meter.destroy();
       colorPicker.destroy();
+      sufixo.destroy();
       onClose?.(api);
     },
   });

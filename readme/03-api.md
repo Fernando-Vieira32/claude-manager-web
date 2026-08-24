@@ -371,7 +371,7 @@ Preferências chave/valor gravadas em arquivo, em **dois escopos com a mesma reg
 | Escopo | Arquivo | Para quê |
 | --- | --- | --- |
 | **global** | `data/settings.json` (um só) | preferência do app inteiro — hoje a retenção da lixeira |
-| **por conversa** | `data/conversas/<id>.json` (um por conversa) | modo do chat, cor da janela… |
+| **por conversa** | `data/conversas/<id>.json` (um por conversa) | `mode`, `model`, `color`, `suffix`/`suffixOn` (frase fixa do fim da mensagem)… |
 
 Os dois ficam dentro do projeto e são ignorados no git. No escopo por conversa, o
 vínculo arquivo ↔ conversa é o próprio `:id` (`<pastaDoProjeto>:<sessionId>`), único;

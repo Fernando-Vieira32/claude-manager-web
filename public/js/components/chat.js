@@ -26,6 +26,10 @@ import { detectOptions } from '../core/detect-options.js';
  * @param {(item:any) => Node} [opts.renderMessage]
  * @param {(state:object) => void} [opts.onState]
  * @param {() => void} [opts.onFinish] chamado ao terminar cada resposta
+ * @param {(text:string, values:object) => string} [opts.beforeSend] última chance de
+ *   mexer no texto antes de virar mensagem (ex.: a frase fixa do fim). O `chat` não
+ *   sabe o que a transformação faz — só que o resultado é o que vai para a tela E
+ *   para o servidor, nessa ordem
  * @param {string} [opts.placeholder]
  * @param {number} [opts.pageSize]
  */
@@ -37,6 +41,7 @@ export function createChat({
   renderMessage = messageBubble,
   onState,
   onFinish,
+  beforeSend,
   placeholder = 'Escreva para continuar esta conversa…  (Enter envia, Shift+Enter quebra linha)',
   submitLabel = 'Enviar',
   allowImages = true,
@@ -96,7 +101,11 @@ export function createChat({
    * terminal: você digita durante a resposta e a mensagem espera a vez. Antes a
    * caixa travava até a resposta acabar.
    */
-  function run(text, values, images = []) {
+  function run(cru, values, images = []) {
+    // transforma ANTES de tudo: a bolha que aparece na tela e o que sai no envio
+    // têm de ser o mesmo texto — mostrar uma coisa e mandar outra seria mentira,
+    // e a fila guarda o texto já pronto
+    const text = beforeSend ? beforeSend(cru, values) : cru;
     if (rodando) {
       const urls = images.map((im) => `data:${im.media_type};base64,${im.data}`);
       const node = messageBubble({
