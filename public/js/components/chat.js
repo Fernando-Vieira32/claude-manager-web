@@ -12,7 +12,8 @@
 //   { type:'system',  model }                      modelo escolhido
 //   { type:'delta',   text }                       pedaço de texto
 //   { type:'message', text }                       texto completo de um bloco
-//   { type:'tool',    name }                       usou uma ferramenta
+//   { type:'tool',       id, name, input, inputTruncated }   chamou uma ferramenta
+//   { type:'toolResult', id, text, truncated, isError }      o que ela devolveu
 //   { type:'notice',  message }                    aviso (stderr, limite de uso)
 //   { type:'result',  ok, subtype, costUsd, turns } fim da resposta
 //   { type:'error',   message }                    falhou
@@ -137,9 +138,23 @@ export function createChat({
           break;
 
         case 'tool':
-          bubble.addTool(event.name);
+          bubble.addTool(event.name, {
+            id: event.id,
+            input: event.input,
+            inputTruncated: event.inputTruncated,
+            // abrir/fechar muda a altura: se o usuário estava no fim, siga no fim
+            onToggle: () => feed.scrollToEnd(),
+          });
           bubble.setActivity(`usando ${event.name}…`);
           sawDelta = false;   // depois da ferramenta o Claude volta a "pensar/escrever"
+          break;
+
+        case 'toolResult':
+          bubble.setToolResult(event.id, {
+            text: event.text,
+            truncated: event.truncated,
+            isError: event.isError,
+          });
           break;
 
         case 'notice':

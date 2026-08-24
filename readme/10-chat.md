@@ -132,12 +132,43 @@ data: {"type":"done","code":0}
 | `system` | `model` | modelo escolhido |
 | `delta` | `text` | pedaço de texto (streaming) |
 | `message` | `text` | bloco de texto completo |
-| `tool` | `name` | usou uma ferramenta |
+| `tool` | `id`, `name`, `input`, `inputTruncated` | **chamou** uma ferramenta (`input` já em texto) |
+| `toolResult` | `id`, `text`, `truncated`, `isError` | o que a ferramenta **devolveu** |
 | `compact` | `ok`, `message` | resultado da compactação (só no `/compact`) |
 | `notice` | `message` | stderr, aviso de limite de uso |
 | `result` | `ok`, `subtype`, `costUsd`, `turns`, `durationMs` | fim da resposta |
 | `error` | `message` | falhou (id inválido, modo proibido, timeout) |
 | `done` | `code`, `signal` | stream fechado |
+
+### Ferramentas e subagentes: o que dá para ver
+
+O chip de cada ferramenta é clicável ([`tool-call`](11-componentes.md#tool-calljs)) e
+abre o **pedido** e o **resultado**. Vale para qualquer ferramenta — `Bash`, `Edit` — e
+também para subagente, que no stream é a ferramenta **`Agent`**, com
+`subagent_type`, `description` e `prompt` dentro do `input`.
+
+O par `tool` → `toolResult` é casado pelo `id` (o `tool_use_id` do CLI). Dois detalhes
+que a interface trata sem inventar:
+
+- **teto de 4000 caracteres** por lado (`MAX_DETAIL` em `services/chat/repo.js`): o
+  prompt de um subagente e o retorno de um `Read` são grandes demais para o SSE. Quando
+  corta, o evento traz `inputTruncated`/`truncated` e a tela **diz** que cortou;
+- **ferramenta que não devolve nada** no stream não fica "executando…" para sempre: ao
+  fim da resposta o chip passa a dizer *"sem resultado registrado neste stream"*.
+
+O que **não** dá para mostrar, e não é limitação da interface:
+
+| Existe no stream | Não existe |
+| --- | --- |
+| a chamada do subagente (tipo, descrição, prompt) | os passos internos dele |
+| o retorno final de um subagente **síncrono** | as ferramentas que ele usou por dentro |
+
+Medido nos transcripts desta máquina: **583 chamadas de `Agent`** (396 síncronas, 187
+em background) e **zero** linhas com `isSidechain:true` — o CLI não grava os turnos do
+subagente no transcript do pai. E em background o `tool_result` é só o recibo
+(`"Async agent launched successfully. agentId: …"`), porque o relatório chega depois,
+por outro caminho. Então "expandir o subagente ao vivo, aninhado, como no terminal"
+não é alcançável por este canal.
 
 ## Nova conversa (a tela inicial)
 

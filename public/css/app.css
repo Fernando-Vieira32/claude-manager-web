@@ -342,6 +342,34 @@ table.grid tr.accent td:first-child { box-shadow: inset 3px 0 0 var(--row-accent
 .bubble-extras { display: flex; flex-wrap: wrap; gap: 6px; }
 .bubble-extras:empty { display: none; }
 
+/* ------------------------------------- componente tool-call (ferramenta) */
+/* Fechado é só um chip na linha das etiquetas; aberto ocupa a linha inteira,
+   senão o detalhe ficaria comprimido ao lado dos outros chips. */
+.tool-call { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.tool-call.open { flex: 1 0 100%; }
+.tool-chip { align-self: flex-start; border: 0; cursor: pointer; font-family: var(--mono); }
+.tool-chip:hover { background: var(--surface); color: var(--text); }
+.tool-chip.err { background: var(--danger-soft); color: var(--danger); }
+.tool-caret { color: var(--text-faint); }
+.tool-detail {
+  display: grid; gap: 8px; min-width: 0;
+  padding: 8px 10px; border-radius: var(--radius-sm);
+  background: var(--bg-2); border: 1px solid var(--line);
+}
+.tool-block { display: grid; gap: 3px; min-width: 0; }
+.tool-key {
+  color: var(--text-faint); font-size: 10.5px;
+  text-transform: uppercase; letter-spacing: .6px;
+}
+.tool-out {
+  margin: 0; max-height: 260px; overflow: auto;
+  white-space: pre-wrap; word-break: break-word;
+  font-family: var(--mono); font-size: 11.5px; color: var(--text-dim);
+}
+.tool-out.tool-err { color: var(--danger); }
+.tool-out.tool-none { color: var(--text-faint); font-style: italic; }
+.tool-cut { color: var(--warn); }
+
 /* ------------------------------------------------ componente composer */
 .composer { display: grid; gap: 8px; }
 .composer-input {

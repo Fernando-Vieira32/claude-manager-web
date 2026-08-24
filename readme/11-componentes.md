@@ -21,6 +21,7 @@ public/js/components/
   data-table.js   tabela declarativa por colunas
   activity.js     indicador vivo "algo está acontecendo" (pulso + tempo + barra)
   context-meter.js  barra de uso de contexto + botão compactar
+  tool-call.js      chip de ferramenta que abre o pedido e o resultado
   choice-select.js  dropdown de opção (+ "outro" para digitar um valor livre)
   duration-field.js quantidade + unidade (dias/meses/anos); compõe o choice-select
   dir-picker.js   modal para navegar o disco e escolher uma pasta
@@ -84,7 +85,8 @@ messageBubble({ role: 'user', text, at, badge });   // → Node
 const b = streamBubble({ role: 'assistant' });      // → controles
 feed.append(b.node);
 b.append('pedaço de texto');   // streaming
-b.addTool('Bash');             // etiqueta de ferramenta
+b.addTool('Bash', { id, input });         // compõe o tool-call (chip expansível)
+b.setToolResult(id, { text, isError });   // casa o retorno pelo id do tool_use
 b.addNotice('limite de uso');  // aviso discreto
 b.setStatus('claude-opus-5');  // chip do cabeçalho
 b.setError('deu erro');        // marca a bolha
@@ -193,6 +195,40 @@ Duas armadilhas que valem lembrar:
   (um arquivo de config, por exemplo), **valide** antes — o painel de Conversas só
   aceita cor que casa com `/^#[0-9a-fA-F]{3,8}$/`, para um valor torto não virar
   declaração de estilo solta.
+
+## `tool-call.js`
+
+Uma chamada de ferramenta dentro de uma mensagem: chip clicável que abre o **pedido**
+e o **resultado**. Genérico — não sabe o nome de nenhuma ferramenta, então serve para
+`Bash`, `Edit` e para um subagente (`Agent`) igualmente.
+
+```js
+const call = createToolCall({
+  name: 'Agent',
+  input: '{ "subagent_type": "Explore", "prompt": "…" }',   // já em texto
+  inputTruncated: true,                                     // avisa que cortou
+  onToggle: () => feed.scrollToEnd(),                       // abrir muda a altura
+});
+extras.append(call.node);
+call.setResult({ text: 'relatório', isError: false });
+call.settle();     // fim do stream: o que não voltou vira "sem resultado"
+call.destroy();    // OBRIGATÓRIO: remove o listener de clique
+```
+
+Quem compõe é a [`bubble`](#bubblejs), via `addTool(name, { id, input, … })` e
+`setToolResult(id, payload)` — o `id` é o `tool_use_id`, que casa a chamada com o
+retorno. A `bubble` resolve e destrói todas no `finish()`/`setError()`/`destroy()`.
+
+Três decisões de honestidade (regra 8 do projeto):
+
+- enquanto não há retorno, o resultado diz **"executando…"** — não "vazio";
+- ao fim do stream, o que não voltou vira **"sem resultado registrado neste stream"** —
+  que é a verdade para subagente em background, cujo retorno é só o recibo de início;
+- texto cortado no teto ganha a marca *"… cortado no limite de exibição"*, em vez de
+  fingir que aquilo era o conteúdo inteiro.
+
+Fechado é só um chip na linha das etiquetas; aberto, a raiz recebe a classe `open` e
+ocupa a linha inteira (senão o detalhe ficaria comprimido ao lado dos outros chips).
 
 ## `activity.js`
 

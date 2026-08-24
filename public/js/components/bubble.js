@@ -3,6 +3,7 @@
 
 import { el, fmt } from '../core/ui.js';
 import { createActivity } from './activity.js';
+import { createToolCall } from './tool-call.js';
 
 const WHO = { user: 'você', assistant: 'claude', system: 'sistema' };
 
@@ -45,6 +46,8 @@ export function streamBubble({ role = 'assistant', who, label = 'pensando…' } 
   activity.start();
   let buffer = '';
   let done = false;
+  const tools = new Map();   // id do tool_use -> tool-call, para casar o resultado
+  const pendentes = [];      // todas as chamadas, para resolver e destruir no fim
 
   const api = {
     node,
@@ -68,9 +71,21 @@ export function streamBubble({ role = 'assistant', who, label = 'pensando…' } 
       return api;
     },
 
-    /** Registra uso de ferramenta como uma etiqueta discreta. */
-    addTool(name) {
-      extras.append(el('span', { class: 'chip' }, `⚙ ${name}`));
+    /**
+     * Registra uso de ferramenta. Compõe o `tool-call`, que é clicável e mostra o
+     * que foi pedido e o que voltou — inclusive de um subagente.
+     */
+    addTool(name, { id, input, inputTruncated, onToggle } = {}) {
+      const call = createToolCall({ name, input, inputTruncated, onToggle });
+      if (id) tools.set(id, call);
+      pendentes.push(call);
+      extras.append(call.node);
+      return api;
+    },
+
+    /** Casa o resultado com a chamada pelo id do `tool_use`. */
+    setToolResult(id, payload) {
+      tools.get(id)?.setResult(payload);
       return api;
     },
 
@@ -91,6 +106,7 @@ export function streamBubble({ role = 'assistant', who, label = 'pensando…' } 
       done = true;
       node.classList.remove('streaming');
       node.classList.add('error');
+      pendentes.forEach((c) => c.settle());
       activity.stop();
       activity.node.hidden = true;
       summary.className = 'chip warn';
@@ -105,6 +121,8 @@ export function streamBubble({ role = 'assistant', who, label = 'pensando…' } 
       if (done) return api;
       done = true;
       node.classList.remove('streaming');
+      // ferramenta sem resultado no stream não fica "executando…" para sempre
+      pendentes.forEach((c) => c.settle());
       activity.stop();
       activity.node.hidden = true;
       if (text) {
@@ -116,7 +134,10 @@ export function streamBubble({ role = 'assistant', who, label = 'pensando…' } 
     },
 
     /** Obrigatório: a bolha pode sumir com o stream ainda vivo (drawer fechado). */
-    destroy() { activity.destroy(); },
+    destroy() {
+      pendentes.forEach((c) => c.destroy());
+      activity.destroy();
+    },
   };
 
   return api;
