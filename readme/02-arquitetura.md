@@ -53,8 +53,9 @@ public/
   js/core/ui.js          el(), fmt, toast, confirmAction, drawer, states
   js/core/chat-fields.js opções de modo e modelo (compartilhadas entre painéis)
   js/core/detect-options.js  detecta pergunta+opções (respostas rápidas)
+  js/core/message-suffix.js  regra da frase fixa no fim da mensagem (pura, testada)
   js/components/*.js     peças reutilizáveis: feed, bubble, composer, chat, stream-sink,
-                         source-tag, floating-window…
+                         source-tag, toggle-text, floating-window…
   js/core/app.js         registra painéis, navegação, busca, tema, health
   js/panels/index.js     MANIFESTO dos painéis
   js/panels/*.js         um arquivo por painel

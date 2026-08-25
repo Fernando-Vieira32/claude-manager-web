@@ -200,14 +200,47 @@ aparência, e ela saía de vista ao trocar de aba.
 para o **próximo** envio — os dois podem divergir, e é por isso que aparecem separados.
 
 **Preferências por conversa (salvas em arquivo).** Cada conversa lembra o **modo** do
-chat (só conversa/plano/…), o **modelo** e uma **cor** para a janela — não se perde ao
-fechar e reabrir. Modo e modelo gravam assim que você troca, mesmo sem enviar; a cor sai
-do seletor 🎨 no cabeçalho da janela (amostras + cor livre; "Padrão" remove). Tudo vai
+chat (só conversa/plano/…), o **modelo**, uma **cor** para a janela e uma **frase fixa**
+para o fim das mensagens — não se perde ao fechar e reabrir. Modo e modelo gravam assim
+que você troca, mesmo sem enviar; a cor sai do seletor 🎨 no cabeçalho da janela
+(amostras + cor livre; "Padrão" remove); a frase sai do botão **✎** ao lado dele. Tudo vai
 para um arquivo por conversa
 em `data/conversas/` (dentro do projeto, ignorado no git), pelo serviço
 [`settings`](03-api.md#configurações-settings) — o vínculo arquivo ↔ conversa é o `:id`
 único da conversa. É chave/valor, então dá para lembrar mais coisas no futuro sem mexer
 no serviço.
+
+### Frase fixa no fim das mensagens
+
+O botão **✎** no cabeçalho da janela guarda uma frase e um interruptor. Ligado, essa
+frase é acrescentada ao fim de **toda** mensagem que você mandar **nesta conversa** —
+serve para instrução repetida ("responda em português", "sempre em tópicos", "não altere
+arquivo sem me perguntar") sem digitar de novo a cada vez.
+
+| Estado do botão | O que significa |
+| --- | --- |
+| esmaecido, escrito `frase` | não há frase definida |
+| normal, com a frase resumida | há frase, **desligada** |
+| destacado (cor de acento) | **ligada** — está indo em toda mensagem |
+
+Como funciona, e por que assim:
+
+- **o que você vê é o que foi enviado.** A frase é acrescentada *antes* de a bolha ser
+  desenhada, então a mensagem na tela é exatamente o texto que foi para o Claude.
+  Acrescentar só na hora do envio deixaria a tela mentindo;
+- **separada por linha em branco**, como um parágrafo novo — não colada no fim da frase;
+- **não empilha**: se a mensagem já termina com a frase (reenvio, cópia), ela não entra
+  de novo;
+- **mensagem vazia** (só imagens) vira só a frase;
+- **apagar a frase desliga** o interruptor: não existe "ligado sem frase";
+- grava ao **sair do campo**, não a cada tecla — configuração é arquivo, e uma gravação
+  por letra é rajada de escrita à toa (ver o bug de escrita concorrente em
+  [07](07-seguranca.md)).
+
+As chaves no arquivo da conversa são `suffix` (texto) e `suffixOn` (booleano). Quem
+aplica é a regra pura [`core/message-suffix.js`](13-testes.md); quem desenha é o
+componente [`toggle-text`](11-componentes.md#toggle-textjs) — e o `chat` só sabe que
+existe um gancho `beforeSend`.
 
 (O `drawer` continua em `ui.js` como primitivo reutilizável, hoje sem uso — as
 conversas migraram para janelas flutuantes.)

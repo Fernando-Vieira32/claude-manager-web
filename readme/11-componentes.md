@@ -34,6 +34,7 @@ public/js/components/
   color-picker.js   botão + paleta de cores (amostras + cor livre)
   quick-replies.js  botões de resposta rápida (opções detectadas na pergunta)
   source-tag.js     valor + procedência (certeza x palpite)
+  toggle-text.js    interruptor + texto livre num popover (frase fixa, assinatura…)
   server-status.js  status do servidor (verde/vermelho) + reiniciar/desligar
 ```
 
@@ -161,6 +162,40 @@ cada painel inventava a sua marcação — que é exatamente o tombo já registr
 > funciona, e isso pede uma alteração própria, não um efeito colateral. Quando for
 > convertido, o `note` vira `sourceTag` e a marcação passa a ser única.
 
+## `toggle-text.js`
+
+Um interruptor + um campo de texto, editados num popover, com o estado resumido no
+próprio botão. Genérico: guarda um texto que pode estar **ligado ou desligado**. Hoje é a
+frase fixa do fim da mensagem; serve igual para assinatura de commit, cabeçalho de
+arquivo, comando padrão.
+
+```js
+const tt = createToggleText({
+  label: 'frase',
+  value: settings.suffix || '',
+  enabled: settings.suffixOn === true,
+  placeholder: 'ex.: Responda sempre em português.',
+  hint: 'vai no fim de toda mensagem desta conversa',
+  onChange: ({ value, enabled }) => salvar({ suffix: value, suffixOn: enabled }),
+});
+header.append(tt.node);
+tt.state();     // { phrase, enabled } — pronto para a regra que usa
+tt.set({ value: 'outra', enabled: false });
+tt.destroy();   // OBRIGATÓRIO: solta o clique-fora e o Esc de `document`
+```
+
+Devolve `{ node, value(), enabled(), state(), set(), destroy() }`. Três regras que ele
+garante sozinho, e que quem usa não precisa repetir:
+
+- **não existe "ligado sem texto"**: sem valor, a chave nasce `disabled`, e apagar o
+  texto desliga;
+- **grava no `change`, não no `input`** — ao sair do campo, não a cada tecla. Uma
+  gravação por letra viraria rajada de escrita no arquivo de configuração;
+- **o botão mostra o estado sem abrir**: esmaecido (vazio), normal (tem texto,
+  desligado) ou com a cor de acento (ligado) — senão a frase iria junto sem sinal nenhum.
+
+Não sabe o que é conversa, mensagem ou arquivo: recebe o valor e devolve mudanças.
+
 ## `composer.js`
 
 Caixa de escrever genérica — não sabe o que faz com o texto.
@@ -216,6 +251,7 @@ const chat = createChat({
   fields: [{ name: 'mode', value: 'none', choices: MODE_CHOICES }],
   onState: ({ shown, total }) => drawer.setSubtitle(`${shown} de ${total}`),
   onFinish: () => chat.reload(),   // relê do disco depois da resposta
+  beforeSend: (text, values) => applySuffix(text, sufixo.state()),   // última chance
 });
 
 drawer.open({ body: chat.node, footer: chat.footer, onClose: () => chat.destroy() });
@@ -228,6 +264,21 @@ chat.notice('esta conversa está aberta num terminal');
 O transporte é injetado: qualquer serviço que emita os eventos do contrato
 (`init`, `delta`, `message`, `tool`, `toolResult`, `notice`, `result`, `error`, `done`)
 reaproveita esta vista inteira. `mountChat(container, chat)` monta fora do drawer.
+
+### `beforeSend`: mexer no texto sem espalhar regra
+
+`beforeSend(text, values) => text` é a última chance de transformar a mensagem — hoje a
+[frase fixa](06-interface.md#frase-fixa-no-fim-das-mensagens). Roda **antes de tudo**, em
+`run()`, e por isso vale para os três caminhos (clique em Enviar, `submit()` por código e
+resposta rápida) e também para o que está **na fila**.
+
+A ordem importa: o texto transformado é o que vira **bolha na tela** e o que vai para o
+**servidor**, nessa ordem. Transformar só na hora do envio deixaria a tela mostrando uma
+coisa e o Claude recebendo outra.
+
+O `chat` não sabe o que a transformação faz — quem monta o `beforeSend` é o
+[`conversation-window`](#conversation-windowjs), compondo o `toggle-text` com a regra
+pura `core/message-suffix.js`.
 
 `submit(text, images)` envia por código pelo **mesmo** caminho do clique em "Enviar" (é
 o que as respostas rápidas já usavam por dentro). Serve para abrir a vista já com a
@@ -253,7 +304,8 @@ tabela em [`composer`](#composerjs).
 
 A vista completa de "estar dentro de uma conversa": compõe
 [`floating-window`](#floating-windowjs) + [`chat`](#chatjs) +
-[`context-meter`](#context-meterjs) + [`color-picker`](#color-pickerjs).
+[`context-meter`](#context-meterjs) + [`color-picker`](#color-pickerjs) +
+[`toggle-text`](#toggle-textjs).
 
 Existe porque **dois caminhos abrem a mesma coisa**: clicar em "Ler" na lista e iniciar
 uma conversa nova. Painel não importa painel, então a peça compartilhada é componente e

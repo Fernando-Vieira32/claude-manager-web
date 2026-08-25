@@ -31,6 +31,7 @@ o que é essencial aqui — veja o sandbox abaixo.
 | `test/claude-blocks.test.js` | o `core/claude-blocks.js`, que os **dois** serviços usam: teto de tamanho, blocos → texto, imagem sem base64, e a regra do resumo do chip (caminho pelo fim, comando pelo começo) |
 | `test/chat-stream.test.js` | tradução do stream-json do CLI (`services/chat/stream.js`): linha entra, eventos do contrato saem — ferramenta com `id`/`input`, `toolResult` casado, teto de tamanho, linha quebrada, tipo desconhecido, custo/turnos, limite de uso, **e o `parentId` do subagente** (chamada de dentro do agente aponta para quem a criou, agente-dentro-de-agente mantém a corrente, prosa de subagente não vira mensagem da conversa) |
 | `test/conversations-messages.test.js` | leitura do histórico: `tools` estruturadas, `tool_result` costurado pelo id, mensagem só-de-ferramenta não descartada, resultado órfão, várias ferramentas numa mensagem |
+| `test/message-suffix.test.js` | a frase fixa do fim da mensagem (`public/js/core/message-suffix.js`): separador de parágrafo, desligado não mexe, frase vazia não mexe, não empilha quando a mensagem já termina com ela, mensagem vazia vira só a frase |
 | `test/sessions-conversation-id.test.js` | como uma sessão é identificada: id **declarado** no comando (`--resume`/`-r`/`--session-id`) versus palpite, `--continue`/`--resume` sem valor não declarando nada, uuid solto nos argumentos não valendo, e `-p`/`--print` (headless) sem confundir com `--permission-mode` |
 
 Os dois últimos cobrem a mesma regra pelos dois lados — ao vivo (stream) e relido
@@ -61,6 +62,16 @@ O mesmo vale para o **aninhamento dos subagentes**: o arnês empurra eventos com
 avô, ou solto quando o pai é desconhecido) — 14 checagens. As mutações "ignora o
 `parentId`" (6 falhas), "filho não entra no mapa, então o neto perde o pai" (3) e "não
 revela a seção de passos" (1) acusaram todas.
+
+A **frase fixa** teve os dois tratamentos: a regra é pura e mora em
+`public/js/core/message-suffix.js`, então virou teste de verdade na suíte (mutações
+"sem separador" 4 falhas, "ignora o desligado" 2, "empilha a frase repetida" 1); o
+resto — o controle e o caminho janela → chat → envio — é DOM, e foi conferido por
+arnês (19 checagens, incluindo "a bolha mostra exatamente o que foi enviado"). A
+mutação "transforma só no envio, não na bolha" acusou 2 falhas. Uma terceira mutação
+("ligar sem frase fica ligado") **não** acusou, e o motivo é legítimo: a guarda existe
+em dois lugares (a chave nasce `disabled` e o `enabled()` confere de novo), então tirar
+uma não muda comportamento.
 
 Ele **não** entra na suíte de propósito: um DOM falso mantido à mão viraria dependência
 disfarçada e mentiria em silêncio no dia que divergisse do navegador. É ferramenta de

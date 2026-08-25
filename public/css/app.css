@@ -271,6 +271,40 @@ table.grid tr.accent td:first-child { box-shadow: inset 3px 0 0 var(--row-accent
   border-bottom-color: color-mix(in srgb, var(--fw-accent) 45%, var(--line));
 }
 
+/* --------------------------------------- componente toggle-text (.tgt-*) */
+/* Botão que resume o estado (frase + ligado/desligado) e abre um popover para
+   editar. Fechado, a cor diz se está valendo — sem abrir nada. */
+.tgt { position: relative; display: inline-flex; }
+.tgt-btn {
+  display: inline-flex; align-items: center; gap: 5px; max-width: 210px;
+  padding: 3px 9px; border-radius: 999px;
+  border: 1px solid var(--line); background: var(--surface-2);
+  color: var(--text-dim); font-size: 11.5px; font-family: var(--mono);
+  cursor: pointer; transition: var(--speed);
+}
+.tgt-btn:hover { color: var(--text); border-color: var(--text-faint); }
+.tgt-summary { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* ligado: a frase está indo junto com a mensagem — precisa ser visível */
+.tgt.tgt-on .tgt-btn { background: var(--accent-soft); color: var(--accent); border-color: transparent; }
+.tgt.tgt-empty .tgt-btn { color: var(--text-faint); }
+.tgt-pop {
+  position: absolute; top: calc(100% + 6px); right: 0; z-index: 30;
+  display: grid; gap: 8px; width: 300px; padding: 10px;
+  background: var(--surface); border: 1px solid var(--line);
+  border-radius: var(--radius); box-shadow: var(--shadow);
+}
+.tgt-pop[hidden] { display: none; }
+.tgt-switch { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text-dim); cursor: pointer; }
+.tgt-input {
+  width: 100%; padding: 7px 9px; resize: vertical;
+  background: var(--bg-2); color: var(--text);
+  border: 1px solid var(--line); border-radius: var(--radius-sm);
+  font-family: var(--mono); font-size: 12px;
+}
+.tgt-input:focus { outline: 0; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.tgt-hint { margin: 0; color: var(--text-faint); font-size: 11px; line-height: 1.4; }
+@media (prefers-reduced-motion: reduce) { .tgt-btn { transition: none; } }
+
 /* -------------------------------------- componente color-picker (.cp-*) */
 .cp { position: relative; display: inline-flex; }
 .cp-dot { display: block; width: 14px; height: 14px; border-radius: 50%;
