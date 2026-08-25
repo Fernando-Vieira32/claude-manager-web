@@ -33,6 +33,16 @@ export function createStreamSink({ bubble, onHint, onScroll } = {}) {
     // modelo vira um chip ao lado do indicador — sem apagar o "pensando…"
     system: (e) => { if (e.model) bubble.setStatus(e.model, 'accent'); },
 
+    // Sua mensagem já chegou em quem responde, mas ele está terminando o que você
+    // pediu antes. Dizer "pensando…" aqui seria mentir sobre o que acontece: ainda
+    // não começou. `ahead` é quantas mensagens estão na frente desta.
+    queued: (e) => bubble.setActivity(
+      e.ahead > 1 ? `na fila · ${e.ahead} na frente` : 'na fila · aguardando a vez',
+    ),
+
+    // chegou a vez dela: agora sim está sendo respondida
+    turnStart: () => bubble.setActivity('pensando…'),
+
     delta: (e) => {
       if (!sawDelta) bubble.setActivity('escrevendo…');
       sawDelta = true;

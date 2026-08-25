@@ -1,5 +1,52 @@
 import { openSse } from '../../core/http.js';
-import { sendMessage, compactConversation, startConversation, stopRun, listRunning, isRunning } from './repo.js';
+import {
+  sendMessage, compactConversation, startConversation, stopRun, listRunning, isRunning, chatState,
+} from './repo.js';
+import { subscribe } from './channel.js';
+
+// Um canal fica aberto por horas; navegador e proxy derrubam conexão ociosa sem tráfego.
+const KEEPALIVE_MS = 25_000;
+
+/**
+ * Abre o SSE e transmite o que `run(sse)` produzir.
+ *
+ * Duas coisas moram aqui de propósito:
+ *  - o erro de validação vira EVENTO, não status HTTP: o stream já respondeu 200;
+ *  - cliente que vai embora só perde o stream. Antes o `close` matava o processo;
+ *    agora um processo serve vários turnos e vários clientes, então fechar a aba
+ *    apenas marca este SSE como morto — o Claude termina e grava no `.jsonl`.
+ */
+async function stream(res, run) {
+  const sse = openSse(res);
+  const drop = () => sse.close();
+  res.on('close', drop);
+  res.on('error', drop);
+  try {
+    await run(sse);
+  } catch (err) {
+    sse.send({ type: 'error', message: err.message });
+    sse.send({ type: 'done', code: null });
+    sse.close();
+  }
+}
+
+/**
+ * O canal da conversa: um SSE que NÃO é de um turno nosso. Por ele chegam os turnos que
+ * o CLI começa sozinho (`autoStart` → eventos → `result` → `autoEnd`), o `busy` honesto e
+ * o `gone`. Fechar a aba só desinscreve — jamais mata processo.
+ */
+function events(res, id) {
+  const sse = openSse(res);
+  const off = subscribe(id, sse);
+  sse.send({ type: 'hello', ...chatState(id) });
+  const ping = setInterval(() => { if (!sse.closed) res.write(': keep-alive\n\n'); }, KEEPALIVE_MS);
+  ping.unref?.();
+  return new Promise((resolve) => {
+    const bye = () => { clearInterval(ping); off(); sse.close(); resolve(); };
+    res.on('close', bye);
+    res.on('error', bye);
+  });
+}
 
 export default {
   id: 'chat',
@@ -10,27 +57,23 @@ export default {
     {
       method: 'GET',
       path: '/',
-      summary: 'execuções em andamento',
+      summary: 'processos de chat vivos (busy = respondendo agora)',
       handler: () => ({ items: listRunning() }),
     },
     {
       method: 'POST',
       path: '/',
       summary: 'inicia uma conversa nova (body: { cwd, text, mode, model }) e transmite em SSE',
-      handler: async ({ body, req, res }) => {
-        const sse = openSse(res);
-        try {
-          await startConversation(
-            { cwd: body.cwd, text: body.text, mode: body.mode, model: body.model, images: body.images },
-            sse,
-            req,
-          );
-        } catch (err) {
-          sse.send({ type: 'error', message: err.message });
-          sse.send({ type: 'done', code: null });
-          sse.close();
-        }
-      },
+      handler: ({ body, res }) => stream(res, (sse) => startConversation(
+        { cwd: body.cwd, text: body.text, mode: body.mode, model: body.model, images: body.images },
+        sse,
+      )),
+    },
+    {
+      method: 'GET',
+      path: '/:id/events',
+      summary: 'canal da conversa em SSE: turnos que o CLI começa sozinho, busy, gone',
+      handler: ({ params, res }) => events(res, params.id),
     },
     {
       method: 'GET',
@@ -42,41 +85,21 @@ export default {
       method: 'POST',
       path: '/:id',
       summary: 'envia mensagem e transmite a resposta em SSE (body: { text, mode, model })',
-      handler: async ({ params, body, req, res }) => {
-        const sse = openSse(res);
-        try {
-          await sendMessage(
-            { id: params.id, text: body.text, mode: body.mode, model: body.model, images: body.images },
-            sse,
-            req,
-          );
-        } catch (err) {
-          // o stream já está aberto: o erro vai como evento, não como status HTTP
-          sse.send({ type: 'error', message: err.message });
-          sse.send({ type: 'done', code: null });
-          sse.close();
-        }
-      },
+      handler: ({ params, body, res }) => stream(res, (sse) => sendMessage(
+        { id: params.id, text: body.text, mode: body.mode, model: body.model, images: body.images },
+        sse,
+      )),
     },
     {
       method: 'POST',
       path: '/:id/compact',
       summary: 'compacta o contexto da conversa (/compact) e transmite em SSE',
-      handler: async ({ params, body, req, res }) => {
-        const sse = openSse(res);
-        try {
-          await compactConversation({ id: params.id, model: body.model }, sse, req);
-        } catch (err) {
-          sse.send({ type: 'error', message: err.message });
-          sse.send({ type: 'done', code: null });
-          sse.close();
-        }
-      },
+      handler: ({ params, body, res }) => stream(res, (sse) => compactConversation({ id: params.id, model: body.model }, sse)),
     },
     {
       method: 'POST',
       path: '/:id/stop',
-      summary: 'interrompe a resposta em andamento',
+      summary: 'interrompe o turno em andamento (a fila da conversa continua)',
       handler: ({ params }) => stopRun(params.id),
     },
   ],

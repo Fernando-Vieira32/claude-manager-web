@@ -40,16 +40,6 @@ export function messageBubble({ role = 'assistant', text = '', at, who, badge, i
 }
 
 /**
- * Tira a etiqueta de uma bolha já montada — usado quando a mensagem sai da fila e
- * começa a ser enviada de verdade. Fica aqui porque a marcação da etiqueta é
- * conhecimento desta peça; quem chama não deve cutucar o DOM dela.
- */
-export function clearBadge(node) {
-  node?.querySelector('.bubble-badge')?.remove();
-  return node;
-}
-
-/**
  * Bolha que cresce em tempo real (streaming de texto, ferramentas, avisos).
  * Devolve controles em vez de um nó "cru", para quem escuta um stream apenas
  * chamar append/setActivity/setError sem tocar no DOM.
@@ -72,12 +62,19 @@ export function streamBubble({ role = 'assistant', who, label = 'pensando…' } 
   activity.start();
   let buffer = '';
   let done = false;
+  let failed = false;
   const tools = new Map();   // id do tool_use -> tool-call, para casar o resultado
   const pendentes = [];      // todas as chamadas, para resolver e destruir no fim
 
   const api = {
     node,
     text: () => buffer,
+    /**
+     * Terminou em erro? Quem manda a resposta precisa saber para NÃO recarregar o
+     * feed em cima da bolha — recarregar apaga a explicação do erro e sobra uma tela
+     * vazia sem nenhuma pista (foi bug de verdade).
+     */
+    get failed() { return failed; },
 
     append(chunk) {
       buffer += chunk;
@@ -139,6 +136,7 @@ export function streamBubble({ role = 'assistant', who, label = 'pensando…' } 
 
     setError(message) {
       done = true;
+      failed = true;
       node.classList.remove('streaming');
       node.classList.add('error');
       pendentes.forEach((c) => c.settle());

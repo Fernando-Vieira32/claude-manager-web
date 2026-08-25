@@ -277,13 +277,62 @@ curl -s -X POST localhost:7788/api/conversations/trash/purge \
 | POST | `/api/chat` | **inicia** uma conversa nova `{ cwd, text, mode, model, images }` em SSE |
 | POST | `/api/chat/:id` | envia `{ text, mode, model, images }` e transmite a resposta em SSE |
 | POST | `/api/chat/:id/compact` | compacta o contexto (`/compact`), em SSE |
-| POST | `/api/chat/:id/stop` | interrompe a execução em andamento |
-| GET | `/api/chat` | execuções em andamento |
+| POST | `/api/chat/:id/stop` | interrompe o turno em andamento |
+| GET | `/api/chat` | processos de chat vivos |
+| GET | `/api/chat/:id/events` | **canal da conversa** em SSE (turnos que o CLI começa sozinho) |
 | GET | `/api/chat/:id/status` | `{ running }` |
 
 `mode` é o modo de permissão (`none`/`plan`/`auto`/`acceptEdits`); `images` é opcional,
 uma lista `[{ media_type, data }]` (base64) anexada à mensagem. Detalhes, eventos do
 stream, modos, imagens e custo em [10 · Chat](10-chat.md).
+
+**As rotas não mudaram de forma, mudaram de semântica** quando o chat passou a manter um
+processo `claude` vivo por conversa ([10 · Chat](10-chat.md#mandar-mensagem-durante-a-resposta)):
+
+- **`POST /api/chat/:id` durante uma resposta não dá mais 409.** A mensagem vai para o
+  stdin do processo na hora e o CLI a enfileira; o SSE do turno que espera recebe
+  `queued` (`{ ahead: N }`) e depois `turnStart` quando chega a vez dele. O 409 sobrou
+  para trocar de **modo/modelo** com a conversa respondendo e para cruzar chat com
+  `/compact` (que é execução única, porque reescreve o transcript);
+- **`POST /api/chat/:id/stop` interrompe o turno e preserva a fila.** É um
+  `control_request` no stdin, não `SIGTERM`: o turno em voo termina com
+  `result` `subtype: 'interrupted'` e o próximo da fila começa. Vale para o turno corrente,
+  **inclusive quando ele nasceu no CLI**. A porta é a mesma do `/status` (`working`), então
+  o botão que aparece na tela nunca dá 404: sem nada para cortar vem `stopped: false`. Sem
+  processo vivo nenhum, 404;
+- **`GET /api/chat/:id/status` é "trabalhando agora"**, não "tem processo vivo" nem "tem
+  fila". É o `working` do runner: `busy` **ou** uma linha do stdout nos últimos
+  `CHAT_QUIET_MS` (30 s). Precisou mudar porque o CLI abre turnos por conta própria — com
+  a fila vazia e o Claude trabalhando, o antigo `busy` respondia `false` e o painel
+  escondia o **Parar** justamente na hora em que ele era necessário
+  ([10 · Chat](10-chat.md#turnos-que-nascem-sozinhos-o-cli-começa-por-conta-própria));
+- **`GET /api/chat/:id/events` é o canal da conversa** (SSE que fica aberto): primeiro
+  evento `hello`, depois `autoStart` → eventos do turno → `result` → `autoEnd` para cada
+  turno que o CLI começa sozinho, mais `busy` (`{ busy, pending }`) quando esse estado
+  muda e `gone` quando o processo encerra. No meio vêm os eventos normais do stream
+  (`delta`, `message`, `tool`, `toolResult`, `notice`, `system`, `result`) — só os do turno
+  espontâneo, porque o que pertence a um turno seu já vai no SSE daquele turno. Fechar a
+  conexão apenas desinscreve, **nunca** mata processo; há keep-alive a cada ~25 s;
+- **`GET /api/chat` lista os processos vivos** e mudou de formato:
+
+```json
+{ "items": [ { "id": "-home-fernando:57316179-…", "pid": 45497,
+               "startedAt": "2026-08-25T12:00:00.000Z", "kind": "chat",
+               "busy": true, "working": true, "auto": false, "pending": 2,
+               "lastOutputAt": "2026-08-25T12:03:11.004Z" } ] }
+```
+
+| Campo | O quê |
+| --- | --- |
+| `kind` | `chat` (processo vivo) ou `compact` (execução única) |
+| `busy` | tem turno em curso: **fila não vazia OU turno espontâneo rodando** |
+| `working` | `busy` ou saída recente (`CHAT_QUIET_MS`) — é o que o `/status` responde |
+| `auto` | o turno em curso nasceu no CLI, não numa mensagem sua |
+| `pending` | turnos **seus** na fila (contando o em voo) |
+| `lastOutputAt` | última linha lida do stdout (`null` no `compact`) |
+
+`busy: false` com `working: false` é um processo quente que vai sair sozinho depois de
+`CHAT_IDLE_MS` de silêncio.
 
 ## Arquivos (`fs`)
 

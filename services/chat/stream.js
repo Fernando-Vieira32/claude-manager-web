@@ -21,6 +21,10 @@ function explainResult(subtype) {
       return 'atingiu o limite de turnos para esta resposta.';
     case 'error_during_execution':
       return 'erro durante a execução do Claude (veja o log do servidor).';
+    // o CLI encerra o turno cortado como erro; quem clicou "Parar" não errou nada,
+    // então o runner reescreve o subtype antes de traduzir (services/chat/runner.js)
+    case 'interrupted':
+      return 'interrompido';
     default:
       return subtype ? `falhou (${subtype})` : 'falhou';
   }

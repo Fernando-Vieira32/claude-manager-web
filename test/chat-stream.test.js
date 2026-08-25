@@ -178,6 +178,16 @@ describe('ciclo de vida da resposta', () => {
     assert.match(e.message, /limite de turnos/);
   });
 
+  // quem clicou "Parar" não errou nada: o runner troca o subtype do result cortado
+  // por `interrupted` (services/chat/runner.js) e aqui ele vira a palavra honesta
+  it('turno interrompido não é chamado de erro de execução', () => {
+    const [e] = capture({ type: 'result', subtype: 'interrupted', is_error: true });
+
+    assert.equal(e.ok, false);
+    assert.equal(e.subtype, 'interrupted');
+    assert.match(e.message, /^interrompido$/);
+  });
+
   it('limite de uso vira aviso', () => {
     const [e] = capture({ type: 'rate_limit_event', rate_limit_info: { status: 'rejected' } });
 

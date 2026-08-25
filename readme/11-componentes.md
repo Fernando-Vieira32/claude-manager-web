@@ -17,8 +17,11 @@ public/js/components/
   feed.js         lista paginada que cresce para cima (histórico, logs)
   bubble.js       bolha de mensagem estática e bolha de streaming
   composer.js     caixa de escrever com campos de opção e enviar/parar
-  chat.js         feed + composer + fila de envio = vista de conversa
+  chat.js         feed + composer + envio = vista de conversa
+  live-answer.js  uma resposta chegando: bolha viva + tradutor, já dentro do feed
   stream-sink.js  traduz os eventos do stream em chamadas na bolha viva
+  quick-reply-host.js  o lugar dos botões de resposta rápida (detecta e se limpa)
+  auto-turn-watcher.js  mostra na vista o que chega pelo canal (turno que nasce sozinho)
   conversation-window.js  a janela de uma conversa (floating-window + chat + medidor + cor)
   data-table.js   tabela declarativa por colunas
   activity.js     indicador vivo "algo está acontecendo" (pulso + tempo + barra)
@@ -84,13 +87,13 @@ commits depois.
 ```js
 messageBubble({ role: 'user', text, at, badge });          // → Node
 messageBubble(msgDaApi);   // com `tools`, já monta os chips de ferramenta resolvidos
-clearBadge(node);          // tira a etiqueta de uma bolha já montada → o próprio node
 ```
 
-`clearBadge` existe para a fila do [`chat`](#chatjs): a mensagem entra na tela com
-`badge: 'na fila'` e, quando chega a vez dela, perde a etiqueta **na mesma bolha**. A
-função vive aqui porque a marcação (`.bubble-badge`) é conhecimento desta peça — quem
-usa não deve cutucar o DOM dela.
+`badge` é uma etiqueta opcional no cabeçalho da bolha. Existiu um `clearBadge(node)`
+para a fila antiga do [`chat`](#chatjs) (a mensagem entrava com `badge: 'na fila'` e
+perdia a etiqueta na vez dela); ele **foi removido** quando a fila saiu do navegador —
+hoje quem mostra a espera é a bolha de resposta, pelo evento `queued` (ver
+[`stream-sink`](#stream-sinkjs)). Uma informação, um lugar.
 
 ```js
 const b = streamBubble({ role: 'assistant' });      // → controles
@@ -113,6 +116,61 @@ aparece ao expandir o pai, como no terminal. Funciona em qualquer profundidade, 
 filho também fica no mapa e passa a ser pai do neto. `parentId` que não casa com ninguém
 cai no nível de cima — melhor mostrar solto que sumir.
 
+## `live-answer.js`
+
+Uma resposta **chegando** na tela: a bolha viva e o tradutor de eventos, já colados e
+já dentro do feed.
+
+```js
+const resposta = createLiveAnswer({ feed, onHint: (t) => composer.setHint(t) });
+await send(texto, valores, imagens, resposta.onEvent, sinal);
+resposta.finish();          // encerra o "trabalhando"; sem isto o indicador pulsa para sempre
+resposta.bubble.failed;     // terminou em erro?
+```
+
+Existe porque nasceram **dois** lugares montando o mesmo par bolha+tradutor: a resposta
+a uma mensagem sua e a resposta que o Claude começa por conta própria (ver
+[`chat.watch`](#chatjs)). Duas cópias do mesmo desenho é o tombo que o
+[`CLAUDE.md`](../CLAUDE.md) já registra — então o desenho passou a ter um dono só.
+
+O `onHint` é opcional **de propósito**: uma resposta que você não pediu não deve mexer
+na dica da sua caixa de escrever.
+
+## `quick-reply-host.js`
+
+O lugar dos botões de resposta rápida no rodapé. Recebe o texto da última resposta,
+detecta as opções e monta os botões; sem opções, não desenha nada.
+
+```js
+const rapidas = createQuickReplyHost({ onPick: (v) => enviar(v), onWrite: () => composer.focus() });
+rodape.append(rapidas.node);
+rapidas.offer(bubble.text());   // ofereça para este texto (ou nada, se não houver opções)
+rapidas.clear();                // no envio seguinte
+```
+
+Saiu do `chat.js` por ser responsabilidade própria — detectar, montar, limpar na hora
+certa e destruir o que registrou.
+
+## `auto-turn-watcher.js`
+
+Traduz o que chega pelo **canal da conversa** em coisas na vista. O canal existe porque o
+Claude começa turnos por conta própria (agente em segundo plano que volta) — ver
+[10](10-chat.md).
+
+```js
+const observador = createAutoTurnWatcher({ chat });
+const canal = watch(observador.handle);   // transporte entra por parâmetro
+// ao fechar a janela: canal.close(); observador.destroy();
+```
+
+Não toca no DOM: só chama `chat.watch()`, `chat.working()` e `chat.composer.setBusy()`.
+Por isso tem **spec de verdade na suíte** (com um `chat` de mentira), e não arnês — ver
+[13](13-testes.md#a-saída-para-o-front-extrair-a-regra-e-testar-a-regra). A decisão de
+"que ação para qual evento" é a regra pura `core/channel-route.js`, também com spec.
+
+O `setBusy` **só liga** por conta do canal: desligar é decisão do `chat`, o único que
+sabe se ainda há um envio SEU em voo — senão o "Parar" sumia no meio da sua resposta.
+
 ## `stream-sink.js`
 
 Pega um evento do stream e mexe na bolha. É só isso — e é o suficiente para tirar 70
@@ -132,6 +190,12 @@ conhece composer, feed, painel nem rota: só a bolha e dois callbacks. Guarda um
 pedaço de estado — se já houve `delta` — porque depois de uma ferramenta o rótulo tem de
 voltar de "usando Bash…" para "escrevendo…". Evento de tipo desconhecido é ignorado de
 propósito: o contrato ([readme/10](10-chat.md)) pode crescer sem quebrar a tela.
+
+**`queued` e `turnStart` existem por honestidade.** Uma mensagem mandada durante outra
+resposta chega em quem responde na hora, mas só é atendida depois — então a bolha dela
+mostra `na fila · aguardando a vez` (ou `na fila · N na frente`) e só troca para
+`pensando…` quando o `turnStart` chega. Sem isso a bolha ficaria "pensando…" desde o
+começo, inventando um trabalho que ainda não começou.
 
 Reaproveitável em qualquer lugar que mostre resposta chegando — o editor explicando um
 arquivo, um agente rodando em segundo plano.
@@ -227,13 +291,16 @@ São duas coisas diferentes, e confundi-las foi bug:
 
 | | o que faz | quando usar |
 | --- | --- | --- |
-| `setBusy(true)` | botão vira **"Enfileirar"**, aparece "Parar". A caixa **continua escrevível** | enquanto uma resposta corre — quem serializa é o [`chat`](#chatjs), que enfileira |
-| `setLocked(true, motivo)` | `disabled` na caixa e no botão; `motivo` vira o placeholder | operação que mexe na conversa e **não** aceita fila (hoje só `/compact`) |
+| `setBusy(true)` | só revela o botão "Parar". A caixa **continua escrevível** e o rótulo do botão **não muda** | enquanto uma resposta corre |
+| `setLocked(true, motivo)` | `disabled` na caixa e no botão; `motivo` vira o placeholder | operação que mexe na conversa e **não** aceita mensagem nova (hoje só `/compact`) |
 
 Antes o `setBusy` fazia `input.disabled = true`, e o resultado era o oposto do
 terminal: durante a resposta você ficava de mãos atadas, sem poder nem digitar a
-próxima mensagem. Se você precisa impedir o envio, é `setLocked` — e aí diga o
-porquê no `motivo`, senão o usuário só vê uma caixa morta.
+próxima mensagem. Depois ele trocava o rótulo para **"Enfileirar"** — o que também
+deixou de ser verdade: a mensagem escrita durante uma resposta **sai na hora**, não
+fica presa nesta caixa (ver [`chat`](#chatjs)). Chamar de "Enfileirar" mentiria sobre
+quem espera. Se você precisa impedir o envio, é `setLocked` — e aí diga o porquê no
+`motivo`, senão o usuário só vê uma caixa morta.
 
 Amanhã serve para mensagem de commit, prompt do editor ou caixa de comando — muda
 só `fields` e `onSubmit`.
@@ -284,21 +351,63 @@ pura `core/message-suffix.js`.
 o que as respostas rápidas já usavam por dentro). Serve para abrir a vista já com a
 primeira mensagem em mão — é assim que a tela de nova conversa manda a primeira.
 
-### A fila (uma resposta por vez, sem travar a caixa)
+### Mandar durante a resposta: sai na hora, a espera é do outro lado
 
-Como no terminal: você digita durante a resposta e a mensagem **espera a vez**.
+Como no terminal: escrever durante uma resposta **manda a mensagem imediatamente**. O
+`chat` não guarda nada — quem a segura até a vez dela é quem responde (no chat de
+conversas, o próprio CLI; ver [10](10-chat.md)).
 
-- mandar com uma resposta em andamento **enfileira**: a bolha já aparece na tela com a
-  etiqueta `na fila` (é o `badge` do [`bubble`](#bubblejs));
-- quando a resposta atual termina, o `chat` tira a etiqueta daquela bolha — não cria uma
-  segunda — e manda. Nunca há dois streams ao mesmo tempo na mesma conversa;
-- enquanto sobrar item na fila o botão continua "Enfileirar"; ele só volta a "Enviar"
-  quando a fila esvazia (senão o rótulo piscava entre uma mensagem e a outra);
-- `destroy()` **descarta a fila**: fechar a janela não continua mandando mensagem que
-  você não vai ver.
+- cada envio abre o **seu** stream e ganha a **sua** bolha de resposta; pode haver mais
+  de um em voo (`emVoo`), e eles aparecem na tela na ordem em que foram mandados;
+- enquanto a mensagem espera a vez, a bolha dela mostra `na fila · aguardando a vez`
+  (evento `queued`) e, quando começa de fato, volta para `pensando…` (evento
+  `turnStart`). Mostrar "pensando…" antes da hora seria inventar trabalho que não
+  existe;
+- o botão "Parar" fica de pé enquanto houver **qualquer** resposta em voo, e ele pede o
+  corte para o outro lado (`onStop`) em vez de só desligar a conexão do navegador —
+  desligar aqui não faria o trabalho parar lá;
+- as respostas rápidas só aparecem quando **nada** está em voo, senão a resposta
+  seguinte apagaria os botões no meio do caminho;
+- `destroy()` para os indicadores vivos de todas as bolhas em voo (têm timer); com
+  `abort: true` também cancela os streams;
+- **`onFinish` só é chamado quando a tela pode ser recarregada.** Os painéis usam esse
+  gancho para trocar as bolhas vivas pelas do disco, e recarregar é `replaceChildren`:
+  apaga tudo. Com outra resposta em voo isso apagaria a bolha dela; depois de um erro,
+  apagaria a explicação do erro e sobraria uma janela vazia. Quem decide é a regra pura
+  `core/response-end.js`, com spec na suíte — e a bolha informa se falhou pelo
+  `bubble.failed`.
+
+Antes a fila era **aqui**: a segunda mensagem ficava presa no navegador e só saía
+quando a primeira acabava. Era o oposto do terminal, onde a mensagem chega em quem
+responde na hora.
 
 Quem precisa de fato bloquear a escrita usa `chat.composer.setLocked(...)` — ver a
 tabela em [`composer`](#composerjs).
+
+### Resposta que você não pediu: `chat.watch()`
+
+O Claude **começa turnos por conta própria**: quando um agente que ele soltou em segundo
+plano termina, o CLI trata o aviso como uma mensagem nova e responde sem você pedir nada
+(o porquê está em [10](10-chat.md)). Esse trabalho não pertence a nenhum envio seu — e
+antes ele não aparecia em lugar nenhum: a tela congelava enquanto o Claude seguia
+trabalhando por dez minutos.
+
+```js
+const espontanea = chat.watch();            // abre a bolha "retomou sozinho…"
+espontanea.onEvent(evento);                 // mesmo contrato de eventos do envio normal
+espontanea.finish();                        // encerra
+chat.working();                             // há resposta chegando? (sua OU espontânea)
+```
+
+Quem liga isso ao servidor é a janela ([`conversation-window`](#conversation-windowjs)),
+que ouve o canal da conversa. Enquanto uma bolha dessas está aberta, **o feed não é
+recarregado**: recarregar apagaria da tela justamente o que você não tinha visto.
+
+Isso é lógica de verdade embrulhada em DOM, então foi conferida por **arnês
+descartável** (27 checagens; as mutações "a caixa volta a segurar", "a caixa trava",
+"ignora o `queued`", "ignora o `turnStart`", "desliga o *respondendo* com resposta em
+voo" e "Parar só desliga a conexão daqui" acusaram todas) — ver
+[13](13-testes.md#quando-o-front-tem-lógica-de-verdade-arnês-descartável).
 
 ## `conversation-window.js`
 
@@ -320,6 +429,7 @@ const janela = createConversationWindow({
   fetchPage: (opts) => api.conversations.read(c.id, opts),
   send: (text, values, images, onEvent, signal) =>
     api.chat.send(c.id, { text, mode: values.mode, model: values.model, images }, onEvent, signal),
+  watch: (onEvent) => api.chat.events(c.id, onEvent),   // canal da conversa
   stop: () => api.chat.stop(c.id),
   onSaveSetting: (patch) => api.settings.save(c.id, patch),
   onCompact: (j) => compactar(j.meter, j.chat),
@@ -329,7 +439,31 @@ await janela.chat.start();
 janela.focus();
 ```
 
-Devolve `{ id, win, chat, meter, setId, setTitle, setHeader, focus, destroy }`.
+Devolve `{ id, win, chat, meter, setId, setTitle, setHeader, listen, focus, destroy }`.
+
+### O canal da conversa (`watch`)
+
+`watch(onEvent)` é o transporte de um canal que fica **aberto enquanto a janela viver**,
+e por ele chega o que o Claude faz **sem** você pedir: ele começa turnos por conta
+própria quando um agente em segundo plano termina ([10](10-chat.md)). Devolve
+`{ close() }`, e a janela fecha no `onClose` — quem abre, fecha.
+
+Para onde vai cada evento é a regra pura `core/channel-route.js`, com spec na suíte; a
+janela só executa as ações que ela devolve:
+
+| Ação | O que a janela faz |
+| --- | --- |
+| `open` | abre a bolha do turno espontâneo (`chat.watch()`) |
+| `feed` | entrega o evento a ela |
+| `close` | encerra a bolha |
+| `busy` | liga o "Parar"; só desliga se `chat.working()` for falso |
+| `gone` | o processo encerrou (normal depois de ociosidade) — nada visível |
+
+O `busy` **só liga** por conta do canal. Desligar é decisão do `chat`, o único que sabe
+se ainda há um envio SEU em voo — senão o "Parar" sumia no meio da sua própria resposta.
+
+Conversa nova não tem id até o primeiro `init`, então o `setId` chama o `listen()`
+quando o id chega. O `listen()` é idempotente: chamar duas vezes não abre dois canais.
 
 Três coisas que valem saber:
 

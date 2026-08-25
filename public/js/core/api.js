@@ -108,6 +108,24 @@ export const api = {
     /** Compacta o contexto (/compact). Mesmo formato de eventos do send. */
     compact: (id, { model } = {}, onEvent, signal) =>
       streamSse(`/api/chat/${encodeURIComponent(id)}/compact`, { model }, onEvent, signal),
+
+    /**
+     * Fica ouvindo TUDO o que acontece nesta conversa, inclusive o que o Claude faz
+     * **sem** você pedir (um agente em segundo plano termina e ele retoma sozinho).
+     * É um canal longo, aberto enquanto a janela existir — daí usar `EventSource`,
+     * que reconecta sozinho se a conexão cair. Devolve `{ close() }`.
+     */
+    events(id, onEvent) {
+      const src = new EventSource(`/api/chat/${encodeURIComponent(id)}/events`);
+      src.onmessage = (e) => {
+        try {
+          onEvent(JSON.parse(e.data));
+        } catch { /* linha parcial: ignora */ }
+      };
+      // erro aqui é normal (servidor reiniciou, rede piscou): o EventSource tenta de
+      // novo por conta própria, e cada reconexão traz um `hello` novo
+      return { close: () => src.close() };
+    },
   },
 
   fs: {
