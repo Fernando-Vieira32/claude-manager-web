@@ -19,6 +19,7 @@ import { createRunner } from './runner.js';
 import { runOnce } from './oneshot.js';
 import { validMessage, validImages, validDir } from './validate.js';
 import { createRunnerRegistry } from './runners.js';
+import { followTranscript } from './follow.js';
 
 /** conversationId -> runner (processo vivo, pode estar ocioso); regras em runners.js */
 const runners = createRunnerRegistry();
@@ -67,6 +68,23 @@ export function chatState(id) {
   const runner = runners.get(id);
   if (!runner?.alive) return { pid: null, busy: false, pending: 0 };
   return { pid: runner.pid, busy: runner.busy, pending: runner.pending };
+}
+
+/**
+ * Acompanha o arquivo desta conversa enquanto alguém ouve o canal — é assim que o que
+ * você faz NO TERMINAL aparece na janela do navegador sem fechar e abrir.
+ *
+ * Pausa enquanto o processo é NOSSO: aí a resposta já sai pelo SSE do próprio turno, e
+ * publicar o arquivo também mostraria tudo em dobro.
+ *
+ * @returns {() => void} para de acompanhar (a rota chama ao fechar o canal).
+ */
+export function watchTranscript(id) {
+  const { file } = resolveConversationId(id);
+  return followTranscript(id, {
+    file,
+    paused: () => Boolean(runners.get(id)?.alive || oneshots.has(id)),
+  });
 }
 
 /**

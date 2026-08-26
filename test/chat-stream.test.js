@@ -69,20 +69,21 @@ describe('chamada de ferramenta', () => {
     assert.equal(e.inputTruncated, false);
   });
 
-  it('subagente vem com tipo e prompt, como qualquer ferramenta', () => {
+  it('subagente NÃO é ferramenta comum: vira `agentStart`, com nome e tipo', () => {
     const [e] = capture(assistantCom({
       type: 'tool_use', id: 'toolu_2', name: 'Agent',
       input: { subagent_type: 'Explore', description: 'Recon', prompt: 'investigue X' },
     }));
 
-    assert.equal(e.name, 'Agent');
-    assert.match(e.input, /Explore/);
-    assert.match(e.input, /investigue X/);
+    assert.equal(e.type, 'agentStart');
+    assert.equal(e.id, 'toolu_2');
+    assert.equal(e.name, 'Recon');
+    assert.equal(e.agentType, 'Explore');
   });
 
   it('corta o pedido gigante e AVISA que cortou', () => {
     const [e] = capture(assistantCom({
-      type: 'tool_use', id: 'toolu_3', name: 'Agent', input: { prompt: 'x'.repeat(50_000) },
+      type: 'tool_use', id: 'toolu_3', name: 'Bash', input: { command: 'x'.repeat(50_000) },
     }));
 
     assert.equal(e.inputTruncated, true);
@@ -148,6 +149,42 @@ describe('resultado da ferramenta', () => {
 
     assert.equal(e.truncated, true);
     assert.ok(e.text.length < 5000);
+  });
+
+  it('aceite do disparo de agente vem marcado e com o id ESTÁVEL dele', () => {
+    // é por esse id que o aviso de fim casa: num agente RETOMADO o aviso traz o id da
+    // chamada que o retomou, não o do disparo
+    const [e] = capture(userCom({
+      type: 'tool_result', tool_use_id: 'toolu_9',
+      content: 'Async agent launched successfully. (interno)\nagentId: aXYZ123 (internal ID)',
+    }));
+
+    assert.equal(e.type, 'toolResult');
+    assert.equal(e.ack, true);
+    assert.equal(e.agentId, 'aXYZ123');
+  });
+
+  it('resultado de ferramenta comum não vem marcado nem inventa id', () => {
+    const [e] = capture(userCom({ type: 'tool_result', tool_use_id: 'toolu_8', content: 'saída' }));
+
+    assert.equal(e.ack, false);
+    assert.equal(e.agentId, null);
+  });
+
+  it('aviso de fim de agente vira `agentEnd` com o relatório e os dois ids', () => {
+    const [e] = capture({
+      type: 'user',
+      message: {
+        content: '<task-notification>\n<task-id>aXYZ123</task-id>\n'
+          + '<tool-use-id>toolu_daMensagem</tool-use-id>\n<status>completed</status>\n'
+          + '<summary>Agent "Lane 3" finished</summary>\n<result>fechou</result>\n</task-notification>',
+      },
+    });
+
+    assert.equal(e.type, 'agentEnd');
+    assert.equal(e.taskId, 'aXYZ123');
+    assert.equal(e.id, 'toolu_daMensagem');
+    assert.equal(e.result, 'fechou');
   });
 
   it('mensagem de usuário sem tool_result não gera evento', () => {

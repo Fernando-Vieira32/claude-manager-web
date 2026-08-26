@@ -47,6 +47,32 @@ export function resultText(content) {
     .join('\n');
 }
 
+/**
+ * Texto legível de uma mensagem (o `content` inteiro). Ferramenta NÃO entra aqui: ela
+ * sai estruturada em `toolFromUse`, para a interface poder abrir o pedido e o resultado.
+ * Imagem vira uma marca — base64 no meio da frase não é texto.
+ */
+export function messageText(content) {
+  if (typeof content === 'string') return content;
+  if (!Array.isArray(content)) return '';
+  return content
+    .map((block) => {
+      if (typeof block === 'string') return block;
+      if (block?.type === 'text') return block.text || '';
+      if (block?.type === 'image') return '🖼 imagem';
+      return '';
+    })
+    .filter(Boolean)
+    .join(' ');
+}
+
+/**
+ * Isto é fala de gente? O CLI grava no MESMO campo os marcadores dele — `<system-reminder>`,
+ * `<task-notification>`, `<command-name>` — e o aviso `Caveat:`. Mostrar isso como se
+ * alguém tivesse digitado seria mentir sobre quem falou.
+ */
+export const isNoiseText = (text) => !text || text.startsWith('<') || text.startsWith('Caveat:');
+
 // Campos do `input` que servem de resumo curto, em ordem de preferência. Genérico
 // de propósito: não é uma lista de ferramentas, é uma lista de CAMPOS. Ferramenta
 // nova que use um destes ganha resumo sem ninguém mexer aqui.

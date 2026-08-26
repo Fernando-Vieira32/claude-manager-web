@@ -72,7 +72,22 @@ export function createStreamSink({ bubble, onHint, onScroll } = {}) {
     },
 
     toolResult: (e) => bubble.setToolResult(e.id, {
-      text: e.text, truncated: e.truncated, isError: e.isError,
+      text: e.text, truncated: e.truncated, isError: e.isError, ack: e.ack, agentId: e.agentId,
+    }),
+
+    // Agente é bloco PRÓPRIO, não chip no pé da mensagem: ele trabalha por minutos, e o
+    // resultado da ferramenta que o disparou é só o aceite (`ack`), não o trabalho.
+    agentStart: (e) => {
+      bubble.addAgent({ id: e.id, name: e.name, agentType: e.agentType, model: e.model, parentId: e.parentId });
+      // quem trabalha é o agente; o indicador segue no que o main está fazendo
+      if (!e.parentId) bubble.setActivity('agentes trabalhando…');
+    },
+
+    agentEnd: (e) => bubble.endAgent({
+      // `taskId` é o id ESTÁVEL do agente; `id` é o da chamada que gerou o aviso, que num
+      // agente retomado NÃO é a do disparo
+      id: e.id, taskId: e.taskId, summary: e.summary, result: e.result,
+      status: e.status, durationMs: e.durationMs,
     }),
 
     notice: (e) => bubble.addNotice(e.message),

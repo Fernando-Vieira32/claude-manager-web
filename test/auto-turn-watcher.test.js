@@ -15,14 +15,23 @@ import { createAutoTurnWatcher } from '../public/js/components/auto-turn-watcher
 /** `chat` de mentira: grava o que foi pedido a ele. */
 function fakeChat({ working = false } = {}) {
   const log = [];
+  const rotulos = [];
+  const falas = [];
   let bolhas = 0;
   const chat = {
     log,
+    rotulos,
+    falas,
     trabalhando: working,
     working: () => chat.trabalhando,
     composer: { setBusy: (v) => log.push(`busy:${v}`) },
-    watch() {
+    peer: (fala) => { falas.push(fala); log.push('fala no feed'); },
+    agentEvent: (e) => { log.push(`agente:${e.type}`); },
+    resync: () => { log.push('releu do disco'); },
+    reload: () => { log.push('reload'); },
+    watch(opts = {}) {
       bolhas += 1;
+      rotulos.push(opts.label ?? null);
       log.push('abriu bolha');
       return {
         onEvent: (e) => log.push(`evento:${e.type}`),
@@ -79,6 +88,53 @@ describe('createAutoTurnWatcher', () => {
     });
   });
 
+  describe('a conversa está sendo conduzida no terminal', () => {
+    it('o turno de lá abre bolha com rótulo próprio — não é "retomou sozinho"', () => {
+      obs.handle({ type: 'autoStart', source: 'terminal' });
+      assert.deepEqual(chat.rotulos, ['no terminal…']);
+    });
+
+    it('turno sem procedência declarada mantém o rótulo padrão da bolha', () => {
+      obs.handle({ type: 'autoStart' });
+      assert.deepEqual(chat.rotulos, [null]);
+    });
+
+    it('a fala digitada lá entra no feed como mensagem, sem abrir bolha', () => {
+      obs.handle({ type: 'peer', role: 'user', text: 'olha isso', at: '2026-08-25T19:00:00.000Z' });
+
+      assert.deepEqual(chat.log, ['fala no feed']);
+      assert.equal(chat.bolhas, 0);
+      assert.equal(chat.falas[0].text, 'olha isso');
+      assert.equal(chat.falas[0].at, '2026-08-25T19:00:00.000Z');
+    });
+
+    it('e a fala não interrompe a resposta que está chegando', () => {
+      obs.handle({ type: 'autoStart', source: 'terminal' });
+      obs.handle({ type: 'peer', role: 'user', text: 'mais uma coisa' });
+      obs.handle({ type: 'delta', text: 'continuo' });
+
+      assert.deepEqual(chat.log, ['abriu bolha', 'fala no feed', 'evento:delta']);
+      assert.equal(chat.bolhas, 1);
+    });
+  });
+
+  describe('agente em segundo plano', () => {
+    it('chega pelo canal e vai para os agentes da conversa, sem abrir bolha', () => {
+      obs.handle({ type: 'agentStart', id: 'a1', name: 'Lane 1' });
+      obs.handle({ type: 'agentEnd', id: 'a1', result: 'fechou' });
+
+      assert.deepEqual(chat.log, ['agente:agentStart', 'agente:agentEnd']);
+      assert.equal(chat.bolhas, 0);
+    });
+
+    it('com um turno aberto, o bloco entra na bolha dele', () => {
+      obs.handle({ type: 'autoStart', source: 'terminal' });
+      obs.handle({ type: 'agentStart', id: 'a1', name: 'Lane 1' });
+
+      assert.deepEqual(chat.log, ['abriu bolha', 'evento:agentStart']);
+    });
+  });
+
   describe('o "Parar" (setBusy)', () => {
     it('liga quando o canal diz que está respondendo', () => {
       obs.handle({ type: 'busy', busy: true });
@@ -99,6 +155,19 @@ describe('createAutoTurnWatcher', () => {
     it('o `hello` da conexão também acerta o estado', () => {
       obs.handle({ type: 'hello', pid: 7, busy: true, pending: 0 });
       assert.deepEqual(chat.log, ['busy:true']);
+    });
+  });
+
+  describe('o canal caiu e voltou', () => {
+    it('a primeira conexão não relê nada', () => {
+      obs.handle({ type: 'hello', busy: false, pending: 0 });
+      assert.deepEqual(chat.log, ['busy:false']);
+    });
+
+    it('a segunda pede para reler a conversa do disco', () => {
+      obs.handle({ type: 'hello', busy: false, pending: 0 });
+      obs.handle({ type: 'hello', busy: false, pending: 0 });
+      assert.deepEqual(chat.log, ['busy:false', 'busy:false', 'releu do disco']);
     });
   });
 

@@ -28,16 +28,19 @@ o que é essencial aqui — veja o sandbox abaixo.
 | `test/settings.test.js` | os **dois escopos** (global e por conversa) contra os mesmos casos: mesclagem PATCH, `''`/`null` removendo chave, chave/valor inválidos, teto de 16 KB, arquivo ilegível, escopos não se misturando |
 | `test/settings-concurrency.test.js` | regressão do bug de gravação concorrente (ver [07](07-seguranca.md)) |
 | `test/claude-models.test.js` | resolução modelo → janela de contexto: sufixo `[1m]`/`-fast` removido, alias resolvendo para o mais novo da família, `<synthetic>` ignorado, ausência de catálogo devolvendo `null` em vez de um número inventado |
-| `test/claude-blocks.test.js` | o `core/claude-blocks.js`, que os **dois** serviços usam: teto de tamanho, blocos → texto, imagem sem base64, e a regra do resumo do chip (caminho pelo fim, comando pelo começo) |
+| `test/claude-blocks.test.js` | o `core/claude-blocks.js`, que os **dois** serviços usam: teto de tamanho, blocos → texto, imagem sem base64, a regra do resumo do chip (caminho pelo fim, comando pelo começo), e o julgamento "isto é fala de gente?" (`messageText`/`isNoiseText`), que o leitor de conversas e o seguidor do terminal precisam fazer igual |
 | `test/chat-stream.test.js` | tradução do stream-json do CLI (`services/chat/stream.js`): linha entra, eventos do contrato saem — ferramenta com `id`/`input`, `toolResult` casado, teto de tamanho, linha quebrada, tipo desconhecido, custo/turnos, limite de uso, turno **interrompido** não sendo chamado de erro de execução, **e o `parentId` do subagente** (chamada de dentro do agente aponta para quem a criou, agente-dentro-de-agente mantém a corrente, prosa de subagente não vira mensagem da conversa) |
 | `test/chat-runner.test.js` | o **processo vivo** por conversa (`services/chat/runner.js`): as duas mensagens já escritas no stdin com o turno 1 em voo, `queued`/`turnStart` na ordem certa (e o `turnStart` saindo na **primeira linha** do turno, não no envio), evento do turno em voo não vazando para quem espera, `result` fechando só aquele SSE, interrupt virando `subtype: 'interrupted'` sem descartar a fila, processo morrendo → `error`+`done` em todos os pendentes, tempo limite interrompendo (não matando) — **e o turno que o CLI começa sozinho**: nasce no canal (`autoStart` → eventos → `result` → `autoEnd`) sem descartar nada, o `result` dele não consome quem está na fila, mensagem durante ele recebe `queued { ahead: 1 }`, `busy`/`working` honestos, ociosidade por **silêncio** (não fecha o stdin com saída chegando nem com turno em curso; fecha depois do silêncio) |
+| `test/claude-agents.test.js` | o `core/claude-agents.js`, que os **dois** serviços usam: `Agent`/`Task` reconhecidos (e nada mais), o **aceite do disparo** ("Async agent launched successfully") distinguido do relatório, o **id estável** (`agentId`) saindo do texto do aceite, o `<task-notification>` rendendo id do disparo/status/resumo/relatório, relatório com quebras e `<` saindo inteiro, aviso truncado sem estourar |
+| `test/chat-transcript-events.test.js` | uma linha do **transcript** virando evento do canal (`services/chat/transcript-events.js`) — é como o que roda **no terminal** aparece na janela: `assistant` abrindo o turno com `source: 'terminal'` (inclusive quando só pensou), `tool_use`/`tool_result` casados pelo id, `system/turn_duration` como fim do turno (no transcript **não existe** linha `result`), fala digitada no terminal virando `peer` sem interromper a resposta, resultado **e** fala na mesma entrada saindo os dois, marcador do CLI e linha pela metade ignorados |
+| `test/chat-follow.test.js` | seguir o `.jsonl` da conversa (`services/chat/follow.js`), com arquivo de verdade e `tick()` chamado à mão: só o que acontece **a partir de agora** (o histórico a janela já leu do disco), linha pela metade esperando o `\n`, caractere partido entre duas leituras, **pausado** não publicando mas andando o cursor, arquivo que encolheu recomeçando do novo fim, e um seguidor só para N janelas na mesma conversa |
 | `test/chat-channel.test.js` | o **canal** por conversa (`services/chat/channel.js`): publicar sem inscrito não estoura, dois inscritos recebem, canais não se misturam, desinscrever para de receber, SSE fechado (ou que estoura ao escrever) sai da lista sozinho |
-| `test/conversations-messages.test.js` | leitura do histórico: `tools` estruturadas, `tool_result` costurado pelo id, mensagem só-de-ferramenta não descartada, resultado órfão, várias ferramentas numa mensagem |
+| `test/conversations-messages.test.js` | leitura do histórico em **blocos**, na ordem: prosa e chamada da mesma mensagem virando dois blocos, `tool_result` costurado pelo id, mensagem só-de-ferramenta não descartada, resultado órfão, várias ferramentas numa mensagem — **e o agente**: bloco próprio (não ferramenta), o aceite do disparo NÃO o encerrando, o `<task-notification>` entregando o relatório no bloco dele dez minutos depois (com a duração tirada dos dois carimbos), agente que falhou marcado, aviso de agente de outra conversa não quebrando a leitura, agente síncrono terminando pelo próprio resultado |
 | `test/message-suffix.test.js` | a frase fixa do fim da mensagem (`public/js/core/message-suffix.js`): separador de parágrafo, desligado não mexe, frase vazia não mexe, não empilha quando a mensagem já termina com ela, mensagem vazia vira só a frase |
 | `test/response-end.test.js` | o que pode acontecer quando **uma** resposta termina (`public/js/core/response-end.js`): com outra resposta em voo não recarrega o feed nem oferece botões, depois de erro/interrupção também não (recarregar apaga a explicação da tela), e a caixa só sai de "respondendo" quando não sobra nada em voo |
 | `test/chat-runners-registry.test.js` | quando um processo vivo é reaproveitado (`services/chat/runners.js`): mesma assinatura reaproveita **mesmo respondendo** (a mensagem entra na fila dele, sem tocar no disco), assinatura diferente recusa com 409 se está respondendo e devolve `null` se está ocioso, processo morto nunca é reaproveitado, e `forget` não apaga um substituto já registrado |
-| `test/channel-route.test.js` | para onde vai cada evento do canal (`public/js/core/channel-route.js`): `autoStart` abre a bolha, conteúdo alimenta a que está aberta, `autoEnd`/`gone` encerram, conteúdo sem aviso de início abre em vez de sumir, `hello`/`busy` não sujam a tela |
-| `test/auto-turn-watcher.test.js` | o que aparece na vista quando chega algo pelo canal (`public/js/components/auto-turn-watcher.js`, com um `chat` de mentira): UMA bolha por turno espontâneo, o "Parar" só LIGA pelo canal (desligar é do chat, que sabe se há envio seu em voo), `gone` encerra a bolha aberta, `destroy` mata o timer dela |
+| `test/channel-route.test.js` | para onde vai cada evento do canal (`public/js/core/channel-route.js`): o **segundo** `hello` pedindo releitura do disco (o canal caiu e voltou; o que passou na queda não veio pelo canal), `autoStart` abre a bolha, conteúdo alimenta a que está aberta, `autoEnd`/`gone` encerram, conteúdo sem aviso de início abre em vez de sumir, `hello`/`busy` não sujam a tela, e a fala vinda do terminal (`peer`) indo ao feed sem abrir nem fechar bolha |
+| `test/auto-turn-watcher.test.js` | o que aparece na vista quando chega algo pelo canal (`public/js/components/auto-turn-watcher.js`, com um `chat` de mentira): UMA bolha por turno espontâneo, o "Parar" só LIGA pelo canal (desligar é do chat, que sabe se há envio seu em voo), `gone` encerra a bolha aberta, `destroy` mata o timer dela — e a conversa conduzida no terminal: bolha com rótulo próprio ("no terminal…"), fala de lá entrando no feed sem interromper a resposta que está chegando |
 | `test/chat-entrypoint.test.js` | o ambiente do processo `claude` (`services/chat/bin.js`): a conversa é marcada com um `entrypoint` que o `/resume` **não** filtra (nem `sdk-*` nem `cli`), o diretório do binário vai na frente do PATH, e `CHAT_ENTRYPOINT` permite escolher outro valor |
 | `test/sessions-conversation-id.test.js` | como uma sessão é identificada: id **declarado** no comando (`--resume`/`-r`/`--session-id`) versus palpite, `--continue`/`--resume` sem valor não declarando nada, uuid solto nos argumentos não valendo, e `-p`/`--print` (headless) sem confundir com `--permission-mode` |
 
@@ -79,6 +82,18 @@ O mesmo vale para o **aninhamento dos subagentes**: o arnês empurra eventos com
 avô, ou solto quando o pai é desconhecido) — 14 checagens. As mutações "ignora o
 `parentId`" (6 falhas), "filho não entra no mapa, então o neto perde o pai" (3) e "não
 revela a seção de passos" (1) acusaram todas.
+
+Para a conversa que roda **no terminal** o arnês fez o outro pedaço: os eventos que o
+servidor publicou de verdade (medidos pelo HTTP, ponta a ponta) entram no `chat` real e o
+que se confere é a TELA — a bolha abre uma só vez e diz "no terminal…", o chip da
+ferramenta recebe o resultado dela, no fim do turno a bolha para de pulsar, a fala
+digitada lá aparece como mensagem marcada e **não** abre bolha, o turno seguinte ganha
+bolha nova e o contador do cabeçalho acompanha (15 checagens). E uma checagem a mais que
+vale citar: **fechar a janela com uma resposta viva na tela**. O `destroy()` do `chat`
+chamava `voo.bubble.destroy()` num objeto que só tem `resposta`, então fechar assim
+estourava (`Cannot read properties of undefined`) — bug antigo, achado lendo o código, e
+que só é *pego* se o arnês fechar a janela **sem** encerrar a bolha antes. Ordem de
+limpeza no teste é regra, não detalhe: encerrar primeiro esconde exatamente o caso.
 
 A **frase fixa** teve os dois tratamentos: a regra é pura e mora em
 `public/js/core/message-suffix.js`, então virou teste de verdade na suíte (mutações
@@ -156,6 +171,78 @@ Uma mutação **não** acusou, e é o mesmo caso de sempre: tirar o `keepAwake()
 `handleLine` (o rearme da ociosidade a cada linha) não muda comportamento, porque o
 próprio temporizador rearma quando ainda há turno em curso. Ficou por intenção — "cada
 linha é sinal de vida" é a regra que se quer ler ali —, não por necessidade.
+
+#### Agentes como blocos próprios (mutações)
+
+O desenho de agente ([10 · Chat](10-chat.md#agentes-em-segundo-plano)) foi provado
+quebrando cada regra. Suíte de 336 testes + os três arnês do front:
+
+| Mutação no código | Onde acusou |
+| --- | --- |
+| aceite do disparo tratado como relatório (`isLaunchAck` sempre falso) | suíte |
+| `Task` (nome antigo) deixa de ser agente | suíte |
+| aviso de fim casado pelo `task-id` em vez do `tool-use-id` | suíte |
+| aceite não guardando o id estável, e aviso casando só pelo disparo (agente RETOMADO perde o relatório) | suíte |
+| stream não mandando o id estável para a tela | suíte |
+| tela sem o laço id-estável→disparo, e fim ignorando esse id | arnês |
+| relatório cortado no primeiro `<` (regex gulosa) | suíte |
+| agente virando ferramenta comum na leitura do disco | suíte |
+| aceite do disparo encerrando o agente | suíte |
+| aviso de fim virando mensagem na conversa | suíte |
+| blocos fora de ordem (ferramenta antes da prosa) | suíte |
+| duração do agente inventada em vez de `null` | suíte |
+| stream não marcando o `ack` / não separando agente de ferramenta | suíte |
+| aviso de fim de agente abrindo turno | suíte |
+| ferramenta voltando para dentro da bolha | arnês |
+| agente voltando a ser chip de ferramenta | arnês |
+| tela tratando o aceite como fim do agente | arnês |
+| faixa do rodapé não registrando o agente | arnês |
+| fim do agente procurando só na resposta atual (cartão duplicado) | arnês |
+| bolha superada continuando a pulsar | arnês |
+| bolha vazia do fim ficando na tela | arnês |
+
+**19 de 19 acusaram.** Depois vieram mais 10 (contador de agentes de pé, releitura na
+reconexão, faixa alimentada pelo resumo da conversa, cartão ligado à faixa depois de
+desenhado) — todas acusadas, duas delas só depois de eu escrever a checagem que faltava. Duas delas nasceram de bugs que o arnês pegou antes: a bolha de
+prosa que ficava atrás de um bloco continuava pulsando "pensando…" para sempre (um timer
+por parágrafo), e a bolha viva criada preguiçosamente tirava o sinal imediato de "começou
+algo" no turno que o terminal inicia.
+
+Três lições do arnês em si (artefato, não bug do código): `classList.add` aceita VÁRIAS
+classes no DOM de verdade; `.text()` de um DOM falso precisa **ignorar nó escondido**,
+senão o arnês jura que o indicador parado continua na tela; e o detalhe de um bloco é
+dobrado até o clique — para conferir resultado e relatório o arnês tem de **clicar**, que
+é o que a pessoa faz.
+
+#### Seguir a conversa que roda no terminal (mutações)
+
+Mesmo método para o seguidor do `.jsonl`
+([10 · Chat](10-chat.md#seguir-a-conversa-que-roda-no-terminal)). Suíte de 308 testes:
+
+| Mutação no código | Falhas |
+| --- | --- |
+| turno do terminal sem a marca `source` (viraria "retomou sozinho") | 2 |
+| `assistant` que só pensa não abre o turno (tela parada no começo do trabalho) | 1 |
+| `autoEnd` publicado sem turno aberto | 1 |
+| marcador do CLI (`<system-reminder>`…) virando fala de gente | 1 |
+| fala do terminal descartada / com precedência, engolindo o turno | 6 / 1 |
+| publica mesmo pausado (mostraria a resposta nossa em dobro) | 2 |
+| pausado **sem** andar o cursor (ao voltar, despeja o histórico) | 1 |
+| processa a linha que ainda está sendo escrita | 2 |
+| `toString()` no lugar do `StringDecoder` (caractere partido vira lixo) | 1 |
+| cursor medido só no primeiro `tick` (engole o que chegou antes) | 1 |
+| soltar uma janela derruba o seguidor da outra | 2 |
+| arquivo reescrito mantém o turno antigo | 1 |
+| `peer` abrindo bolha no lugar de ir ao feed | 4 |
+| rótulo "no terminal…" ignorado | 1 |
+
+Uma mutação inócua ensinou algo: tirar a guarda "entrada com `tool_result` não é fala"
+não mudava nada, porque o `messageText` já não lê `tool_result` como texto. Só que ao
+investigar apareceu um caso real mal tratado — quando você digita no terminal **enquanto
+uma ferramenta roda**, o CLI grava o resultado dela e a sua fala na MESMA entrada, e a
+regra antiga escolhia um dos dois e perdia o outro. Agora saem os dois (o do turno
+primeiro), e é isso que as duas mutações da linha "fala descartada / com precedência"
+guardam. Mutação que passa não é só teste fraco: às vezes é a regra que estava errada.
 
 Duas lições da própria mutação: a que trocava só o `const target` do tempo limite pegou
 **duas** ocorrências iguais (a do `onStderr` também) e quebrou a sintaxe — 227 "passes" e

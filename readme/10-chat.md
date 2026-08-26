@@ -164,9 +164,10 @@ GET /api/chat/:id/events        (SSE, fica aberto por horas)
 | Evento | Quando |
 | --- | --- |
 | `hello` | primeiro evento ao conectar: `{ pid, busy, pending }` (`pid: null` se não há processo vivo) |
-| `autoStart` | um turno nasceu no CLI |
+| `autoStart` | um turno nasceu sem ser pedido daqui. `source: 'terminal'` quando veio do **arquivo** (é o terminal trabalhando); sem `source`, nasceu no nosso processo |
 | eventos normais | `delta`, `message`, `tool`, `toolResult`, `notice`, `system`, `result` — **do turno espontâneo** |
 | `autoEnd` | o turno espontâneo terminou |
+| `peer` | `{ role, text, at }` — alguém **digitou no terminal** nesta conversa |
 | `busy` | `{ busy, pending }` mudou — é o que mantém o **Parar** honesto |
 | `gone` | o processo da conversa encerrou |
 
@@ -177,7 +178,59 @@ Três decisões que vêm com isso:
 - **fechar a aba só desinscreve** — nunca mata processo. Inscrito com o SSE fechado é
   removido na primeira publicação seguinte;
 - **keep-alive a cada ~25s** (um comentário SSE, `: keep-alive`): é um stream que fica
-  aberto por horas, e conexão ociosa cai sozinha.
+  aberto por horas, e conexão ociosa cai sozinha;
+- **reconexão relê o disco.** O `EventSource` reconecta sozinho (servidor reiniciado,
+  máquina suspensa, rede) — e o seguidor novo começa a olhar do **fim** do arquivo, então o
+  que o terminal escreveu durante a queda não passa pelo canal. Por isso um `hello` que
+  **não** é o primeiro pede uma releitura da conversa: sem isso a janela ficava
+  silenciosamente desatualizada, que é a sensação de "não está em tempo real" sem nenhum
+  aviso na tela. A releitura só acontece com a vista parada — recarregar em cima de uma
+  resposta chegando apagaria dela justamente o que você não viu.
+
+#### Seguir a conversa que roda NO TERMINAL
+
+O canal tem **duas** fontes. A primeira é o nosso processo (acima). A segunda é o
+**arquivo da conversa**, e existe por um problema concreto: com a conversa rodando no
+terminal, a janela de leitura mostrava uma **foto** — para ver o passo seguinte era fechar
+e abrir. Mas navegador e terminal são a mesma conversa e o **mesmo `.jsonl`**; então
+enquanto alguém ouve o canal, o servidor acompanha o fim desse arquivo
+(`services/chat/follow.js`) e publica o que aparece.
+
+```
+navegador abre o canal → followTranscript(id) → tick de ~1s (CHAT_FOLLOW_MS)
+   linhas novas → transcriptEvents() → mesmos eventos do canal → a mesma bolha viva
+```
+
+| Linha do transcript | Vira |
+| --- | --- |
+| `assistant` (texto, `tool_use`, ou só `thinking`) | abre o turno (`autoStart { source: 'terminal' }`) e o conteúdo traduzido pelo **mesmo** `stream.js` |
+| `user` com `tool_result` | `toolResult`, casado pelo id — é o CLI devolvendo resultado ao modelo, não fala de ninguém |
+| `user` com texto | `peer` — a pessoa digitou no terminal |
+| `system/turn_duration` | `autoEnd` (no transcript **não existe** linha `result`: o fim do turno é este) |
+| `queue-operation`, `attachment`, `ai-title`, `file-history-*`, `custom-title`… | nada |
+
+O que isso obriga a acertar, e por quê:
+
+- **começa do FIM do arquivo**, medido de forma síncrona na hora em que o seguidor nasce.
+  Se essa marca fosse tirada no primeiro `tick`, tudo que o terminal escrevesse até lá
+  seria engolido; e se fosse do começo, a janela mostraria a conversa duas vezes (ela já
+  leu o histórico do disco ao abrir);
+- **pausa enquanto o processo é NOSSO.** Aí a resposta já sai pelo SSE do turno, e
+  publicar o arquivo também mostraria tudo em dobro. O cursor **anda mesmo pausado**:
+  sem isso, ao voltar, o histórico inteiro seria despejado de uma vez;
+- **lê só os bytes novos** (o transcript é append-only): seguir um arquivo de 2 MB custa
+  um `stat` por segundo. Linha pela metade espera o `\n`; caractere partido entre duas
+  leituras espera o resto (é `StringDecoder`, não `toString()` — senão a linha vira lixo e
+  a entrada some);
+- **um seguidor por conversa**, com contagem de janelas: duas abas na mesma conversa
+  publicariam cada linha duas vezes;
+- **`peer` não abre nem fecha bolha.** Quem digita no terminal durante uma resposta não a
+  interrompe — a mensagem entra na fila do CLI, e a resposta continua. Na mesma entrada
+  podem vir o resultado de uma ferramenta **e** a fala: saem os dois, o do turno primeiro.
+
+Ainda **não** é simétrico: o que se faz no navegador aparece no terminal só quando ele
+relê o arquivo (`/resume`), porque o CLI de lá tem o histórico em memória. O que este
+seguidor resolve é o lado que dói — ver, daqui, o que está acontecendo lá.
 
 ### Parar, tempo limite e ociosidade
 
@@ -244,6 +297,8 @@ Cada arquivo, uma responsabilidade (o `repo.js` de antes fazia as seis coisas):
 | `services/chat/child.js` | o processo filho e o corte do stdout **linha a linha** |
 | `services/chat/timers.js` | os dois relógios: ociosidade (por silêncio) e tempo limite do turno |
 | `services/chat/channel.js` | o **canal** por conversa: quem ouve o que não tem turno dono |
+| `services/chat/follow.js` | segue o `.jsonl` da conversa (é assim que o **terminal** aparece aqui) |
+| `services/chat/transcript-events.js` | regra pura: uma linha do transcript → eventos do canal |
 | `services/chat/runner.js` | o **processo vivo** por conversa: fila, **turno corrente**, `queued`/`turnStart`, interrupt |
 | `services/chat/oneshot.js` | execução única — sobrou para o `/compact` |
 | `services/chat/validate.js` | texto, imagens e pasta |
@@ -317,6 +372,7 @@ acidente, então habilitá-lo é uma decisão consciente na hora de subir o serv
 | `CHAT_TIMEOUT_MS` | `900000` (15 min) | tempo limite **por turno**: ao estourar, o turno é interrompido (o processo continua vivo). No `/compact`, que é execução única, ainda mata |
 | `CHAT_IDLE_MS` | `300000` (5 min) | quanto **silêncio** (sem linha nenhuma no stdout, sem fila e sem turno espontâneo) até o stdin ser fechado |
 | `CHAT_QUIET_MS` | `30000` (30 s) | janela em que a última linha do stdout ainda conta como "trabalhando" (`working`) |
+| `CHAT_FOLLOW_MS` | `1000` (1 s) | de quanto em quanto tempo o servidor olha o fim do `.jsonl` da conversa aberta, para mostrar o que o **terminal** está fazendo |
 | `CHAT_ALLOW_FULL_TOOLS` | (desligado) | `1` habilita os modos "automático" e "aceitar edições" |
 | `MAX_BODY_BYTES` | `31457280` (30 MB) | limite do corpo da requisição (imagens base64 são grandes) |
 | `CLAUDE_BIN` | (auto) | caminho do binário `claude`. Por padrão é resolvido sozinho (PATH + locais conhecidos como `~/.npm-global/bin`); defina só se o servidor não achar o CLI |
@@ -400,7 +456,9 @@ data: {"type":"done","code":0}
 | `delta` | `text` | pedaço de texto (streaming) |
 | `message` | `text` | bloco de texto completo |
 | `tool` | `id`, `name`, `summary`, `input`, `inputTruncated`, `parentId` | **chamou** uma ferramenta (`input` já em texto). `parentId` = id do `Agent` que a disparou (`null` na thread principal) |
-| `toolResult` | `id`, `text`, `truncated`, `isError`, `parentId` | o que a ferramenta **devolveu** (casa pelo `id`; `parentId` diz em que thread aconteceu) |
+| `toolResult` | `id`, `text`, `truncated`, `isError`, `ack`, `parentId` | o que a ferramenta **devolveu** (casa pelo `id`). `ack: true` = é só o aceite do disparo de um agente, **não** trabalho entregue |
+| `agentStart` | `id`, `name`, `agentType`, `model`, `parentId` | soltou um **agente**. `name` é o que ele foi fazer (`description`); o `id` é o do `tool_use`, e é por ele que o fim se casa |
+| `agentEnd` | `id`, `summary`, `result`, `status`, `taskId` | o agente **voltou**, com o relatório dele. Pode chegar minutos depois, em outro turno — ou em nenhum |
 | `compact` | `ok`, `message` | resultado da compactação (só no `/compact`) |
 | `notice` | `message` | stderr, aviso de limite de uso |
 | `result` | `ok`, `subtype`, `costUsd`, `turns`, `durationMs` | fim **deste** turno. `subtype: 'interrupted'` = cortado pelo **Parar** (ou pelo tempo limite), não é erro de execução |
@@ -411,12 +469,82 @@ Os eventos que **não** pertencem a um turno nosso (`hello`, `autoStart`, `autoE
 `busy`, `gone`, mais os normais do turno espontâneo) chegam pelo
 [canal da conversa](#o-canal-da-conversa), não por este stream.
 
-### Ferramentas e subagentes: o que dá para ver
+### Agentes em segundo plano
+
+Um agente **não** é uma ferramenta comum, e tratá-lo como tal produzia a tela errada. O
+que o CLI grava, medido num transcript de verdade:
+
+| Sinal | Quando | O que é |
+| --- | --- | --- |
+| `tool_use` `Agent` (ou `Task`) com `description`/`subagent_type` | no disparo | o agente **nasceu** |
+| `tool_result` "Async agent launched successfully… agentId: a96a…" | ~3 s depois | só o **aceite** do disparo — não é o trabalho. Mas é aqui que vem o **id estável** do agente |
+| `<task-notification>` numa entrada `user`, com `<tool-use-id>`, `<status>`, `<summary>`, `<result>` | quando ele para (minutos depois) | o agente **terminou**, e aqui está o relatório |
+| `pendingBackgroundAgentCount` no `system/turn_duration` | a cada turno | quantos ainda estão de pé |
+
+Daí três eventos separados no contrato (`agentStart`, `toolResult { ack }`, `agentEnd`) e
+o desenho da tela:
+
+- **cada agente é um bloco próprio** da conversa ([`agent-card`](11-componentes.md#agent-cardjs)),
+  com relógio vivo, e não um chip no pé de uma mensagem. Ele trabalha por dez, doze
+  minutos: desenhado como ferramenta, aparecia **resolvido em 3 s** (pelo aceite) e
+  enterrado dentro de uma bolha já terminada;
+- **quem está de pé aparece no rodapé**, acima da caixa de escrever
+  ([`agent-strip`](11-componentes.md#agent-stripjs)) — é o painel fixo que o terminal tem.
+  Sem isso, saber se o agente ainda vive exigia rolar o feed para trás;
+- **o cartão é da CONVERSA, não do turno.** O disparo acontece num turno e o aviso de fim
+  chega em outro (ou em nenhum), então o registro `id → cartão` vive no nível da conversa.
+  Com um registro por resposta, o relatório caía numa resposta que nunca viu o disparo: o
+  cartão original ficava "rodando…" para sempre e o relatório aparecia duplicado;
+- **o aviso de fim não abre turno.** Ele chega sozinho; deixá-lo abrir uma bolha viva
+  acenderia um indicador que nada iria apagar;
+- **o casamento é pelo id ESTÁVEL do agente** (`agentId` do aceite = `<task-id>` do aviso),
+  não pelo `tool_use` do disparo. Quando o CLI **retoma** um agente (manda mensagem para
+  ele), o aviso seguinte traz o `tool-use-id` **daquela** chamada — medido num transcript
+  real. Casando só pelo disparo, aquele relatório não achava dono e o cartão ficava
+  "rodando…" com doze minutos de trabalho perdidos. O id estável nunca vai para a tela: o
+  próprio CLI pede para não mostrá-lo.
+
+**Nem todo agente que termina tem aviso no arquivo.** Medido: o terminal deu uma frente
+como concluída (`Agent "Lane 2 colisão e tenant dos claims" finished · 15m 4s`) e **não
+existe** `<task-notification>` dela no `.jsonl`. Nesses casos a única evidência é o
+contador do turno seguinte — e é por isso que, por alguns instantes, a janela pode mostrar
+um agente a mais que o terminal: ele sabe de memória, nós sabemos do arquivo. Não há como
+descobrir isso mais cedo sem inventar.
+
+**Agente sem aviso de fim: o contador do CLI resolve.** Numa conversa de verdade havia
+**16** agentes lançados, **8 sem `<task-notification>`** — 4 de ontem (o aviso se perdeu,
+provavelmente num `/compact`) e 4 rodando naquele momento —, com o
+`pendingBackgroundAgentCount` dizendo **4**.
+
+A regra: **em ordem cronológica**, a cada contador do arquivo, se há mais agentes sem
+aviso do que o número diz, os **mais antigos** são encerrados como *"sem aviso de fim"*
+(`status: 'unknown'`) até a conta fechar. O número é autoridade sobre a **quantidade**; a
+ordem "mais antigo primeiro" é a única defensável, porque um agente de uma sessão de ontem
+não sobrevive ao processo que o hospedava.
+
+Duas tentativas erradas antes disso, e por que doeram:
+
+1. **marcar todos como "não sei"** quando a conta não fecha — apagava justamente os 4 que
+   estavam trabalhando naquele instante (a janela reabria sem faixa nenhuma, com o terminal
+   mostrando "Waiting for 4 background agents");
+2. **julgar no fim do arquivo** em vez de a cada contador — o aviso que chega **depois** do
+   contador (aconteceu: o contador viu 5 de pé e um deles só reportou depois) derrubava o
+   agente errado.
+
+Contador ausente (`null`, e existem) não decide nada. E quem está de pé vem no
+**resumo da leitura** (`agents`, em [03](03-api.md#conversas)), calculado sobre o arquivo
+INTEIRO: "quem está rodando" não pode depender de até onde você rolou — ao reabrir a
+janela, o disparo pode estar 200 mensagens atrás.
+
+Não mostramos **tokens por agente** como o terminal: aquele número é do processo que
+hospeda o agente, e não está no arquivo. Preferimos não ter o campo a inventá-lo.
+
+### Ferramentas: o que dá para ver
 
 O chip de cada ferramenta é clicável ([`tool-call`](11-componentes.md#tool-calljs)) e
-abre o **pedido** e o **resultado**. Vale para qualquer ferramenta — `Bash`, `Edit` — e
-também para subagente, que no stream é a ferramenta **`Agent`**, com
-`subagent_type`, `description` e `prompt` dentro do `input`.
+abre o **pedido** e o **resultado**. Vale para qualquer ferramenta — `Bash`, `Edit`. Ele
+é um **bloco na sequência da conversa**, não um chip dentro da bolha: a caixa de mensagem
+tem só o texto do main, e a ordem na tela é a ordem em que as coisas aconteceram.
 
 O chip também traz um **resumo** ao lado do nome, para identificar a chamada sem abrir:
 `⚙ Agent · Explore · Recon do login`, `⚙ Bash · git status`, `⚙ Edit · core/ui.js`. Quem
@@ -427,9 +555,8 @@ caminho mostra as duas últimas partes (o nome do arquivo é o que identifica); 
 o corte vai no fim, porque ali quem identifica é o começo (`git status …`). Ferramenta
 nova que use um desses campos ganha resumo sem ninguém mexer no código.
 
-Vale **ao vivo e ao reabrir a conversa**: a leitura do histórico devolve as mesmas
-ferramentas estruturadas ([03](03-api.md#conversas)), então a interface tem um só
-caminho de render. Isso importa porque, no fim de cada resposta, o painel chama
+Vale **ao vivo e ao reabrir a conversa**: a leitura do histórico devolve os mesmos blocos
+estruturados ([03](03-api.md#conversas)), então a interface tem um só caminho de render. Isso importa porque, no fim de cada resposta, o painel chama
 `chat.reload()` e redesenha a conversa a partir do disco — enquanto o histórico
 achatava ferramenta em texto, o chip vivia poucos segundos e sumia.
 

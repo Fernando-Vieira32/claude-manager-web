@@ -21,7 +21,7 @@ import { routeChannelEvent } from '../core/channel-route.js';
  * @returns {{handle:(event:object) => void, destroy:Function}}
  */
 export function createAutoTurnWatcher({ chat } = {}) {
-  let rota = { auto: false };
+  let rota = { auto: false, hello: false };
   let auto = null;
 
   /** Só LIGAR vem do canal: desligar é do `chat`, que sabe se há envio SEU em voo. */
@@ -31,13 +31,25 @@ export function createAutoTurnWatcher({ chat } = {}) {
   }
 
   const acoes = {
-    open: () => { auto = auto || chat.watch(); },
+    open: (event) => { auto = auto || chat.watch(rotulo(event)); },
     feed: (event) => auto?.onEvent(event),
     close: () => { auto?.finish(); auto = null; },
+    // fala digitada no terminal: entra no feed como mensagem, com a marca de onde veio
+    peer: (event) => chat.peer(event),
+    // agente em segundo plano: é da conversa, não de um turno (ver channel-route)
+    agent: (event) => chat.agentEvent(event),
+    // o canal caiu e voltou: o que passou durante a queda só está no disco
+    resync: () => chat.resync(),
     busy: (event) => marcarOcupado(Boolean(event.busy)),
     // processo encerrou (normal depois da ociosidade): nada visível, só destrava
     gone: () => marcarOcupado(false),
   };
+
+  /**
+   * De onde veio o turno decide o rótulo do indicador. Trabalho que está acontecendo no
+   * TERMINAL não é "retomou sozinho" — chamar assim confundiria as duas coisas.
+   */
+  const rotulo = (event) => (event?.source === 'terminal' ? { label: 'no terminal…' } : {});
 
   const api = {
     /** Um evento do canal entra; o que aparece na tela sai. */
@@ -52,7 +64,7 @@ export function createAutoTurnWatcher({ chat } = {}) {
     destroy() {
       auto?.destroy();
       auto = null;
-      rota = { auto: false };
+      rota = { auto: false, hello: false };
       return api;
     },
   };

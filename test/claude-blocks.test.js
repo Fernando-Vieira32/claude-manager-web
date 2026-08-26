@@ -4,7 +4,50 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { clampText, detailOf, resultText, summaryOf, toolFromUse, MAX_DETAIL } from '../core/claude-blocks.js';
+import {
+  clampText, detailOf, resultText, summaryOf, toolFromUse, messageText, isNoiseText, MAX_DETAIL,
+} from '../core/claude-blocks.js';
+
+describe('messageText', () => {
+  it('conteúdo em texto puro passa direto', () => {
+    assert.equal(messageText('oi'), 'oi');
+  });
+
+  it('junta os blocos de texto', () => {
+    assert.equal(messageText([{ type: 'text', text: 'oi' }, { type: 'text', text: 'tudo bem' }]), 'oi tudo bem');
+  });
+
+  it('imagem vira marca — base64 não é texto de mensagem', () => {
+    assert.equal(messageText([{ type: 'image', source: { data: 'AAAA' } }]), '🖼 imagem');
+  });
+
+  it('ferramenta NÃO entra no texto (ela sai estruturada)', () => {
+    assert.equal(messageText([{ type: 'tool_use', name: 'Bash' }, { type: 'text', text: 'feito' }]), 'feito');
+  });
+
+  it('conteúdo ausente ou estranho devolve vazio', () => {
+    assert.equal(messageText(undefined), '');
+    assert.equal(messageText({ type: 'text' }), '');
+  });
+});
+
+describe('isNoiseText', () => {
+  it('marcador do CLI e aviso não são fala de gente', () => {
+    assert.equal(isNoiseText('<system-reminder>x</system-reminder>'), true);
+    assert.equal(isNoiseText('<task-notification>y</task-notification>'), true);
+    assert.equal(isNoiseText('Caveat: aviso do CLI'), true);
+  });
+
+  it('vazio também não é fala', () => {
+    assert.equal(isNoiseText(''), true);
+    assert.equal(isNoiseText(undefined), true);
+  });
+
+  it('fala de verdade passa', () => {
+    assert.equal(isNoiseText('arruma isso aí'), false);
+    assert.equal(isNoiseText('a < b em ruby'), false);
+  });
+});
 
 describe('clampText', () => {
   it('devolve null para vazio', () => {

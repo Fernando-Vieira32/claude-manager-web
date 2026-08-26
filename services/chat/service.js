@@ -1,6 +1,7 @@
 import { openSse } from '../../core/http.js';
 import {
   sendMessage, compactConversation, startConversation, stopRun, listRunning, isRunning, chatState,
+  watchTranscript,
 } from './repo.js';
 import { subscribe } from './channel.js';
 
@@ -32,20 +33,32 @@ async function stream(res, run) {
 
 /**
  * O canal da conversa: um SSE que NÃO é de um turno nosso. Por ele chegam os turnos que
- * o CLI começa sozinho (`autoStart` → eventos → `result` → `autoEnd`), o `busy` honesto e
- * o `gone`. Fechar a aba só desinscreve — jamais mata processo.
+ * o CLI começa sozinho (`autoStart` → eventos → `result` → `autoEnd`), o que está sendo
+ * feito NO TERMINAL nesta mesma conversa (o servidor acompanha o .jsonl enquanto alguém
+ * ouve), o `busy` honesto e o `gone`. Fechar a aba só desinscreve — jamais mata processo.
  */
 function events(res, id) {
   const sse = openSse(res);
   const off = subscribe(id, sse);
+  const unfollow = follow(sse, id);
   sse.send({ type: 'hello', ...chatState(id) });
   const ping = setInterval(() => { if (!sse.closed) res.write(': keep-alive\n\n'); }, KEEPALIVE_MS);
   ping.unref?.();
   return new Promise((resolve) => {
-    const bye = () => { clearInterval(ping); off(); sse.close(); resolve(); };
+    const bye = () => { clearInterval(ping); off(); unfollow(); sse.close(); resolve(); };
     res.on('close', bye);
     res.on('error', bye);
   });
+}
+
+/** Acompanhar o arquivo é bônus: se falhar, o canal continua servindo o resto. */
+function follow(sse, id) {
+  try {
+    return watchTranscript(id);
+  } catch (err) {
+    sse.send({ type: 'notice', message: `não deu para acompanhar o arquivo desta conversa: ${err.message}` });
+    return () => {};
+  }
 }
 
 export default {

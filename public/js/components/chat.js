@@ -13,8 +13,10 @@ import { el } from '../core/ui.js';
 import { createFeed } from './feed.js';
 import { createComposer } from './composer.js';
 import { messageBubble } from './bubble.js';
+import { messageItems } from './message-items.js';
 import { createLiveAnswer } from './live-answer.js';
 import { createQuickReplyHost } from './quick-reply-host.js';
+import { createAgentStrip } from './agent-strip.js';
 import { afterResponse } from '../core/response-end.js';
 
 /**
@@ -38,7 +40,7 @@ export function createChat({
   send,
   onStop,
   fields = [],
-  renderMessage = messageBubble,
+  renderMessage = messageItems,
   onState,
   onFinish,
   beforeSend,
@@ -47,9 +49,30 @@ export function createChat({
   allowImages = true,
   pageSize = 20,
 } = {}) {
+  // Blocos lidos do disco que têm relógio vivo (cartão de agente ainda rodando). Quem
+  // criou destrói: recarregar o feed troca os nós, e timer de nó removido é vazamento.
+  let doDisco = [];
+  const soltarDoDisco = () => {
+    agentes.clear();                                        // a faixa é redesenhada com o feed
+    for (const item of doDisco.splice(0)) item.destroy?.();
+  };
+
   const feed = createFeed({
     fetchPage,
-    renderItem: renderMessage,
+    renderItem: (item) => renderMessage(item, {
+      // cartão de agente lido do disco: o relógio é nosso para parar, e se ele ainda
+      // está rodando entra na faixa do rodapé como qualquer outro
+      keep: (card, block) => {
+        doDisco.push(card);
+        if (card.running) {
+          agentes.track({ id: block.id, name: block.name, agentType: block.agentType, card, startedAt: block.startedAt });
+        }
+      },
+      onToggle: () => feed.scrollToEnd(),
+    }),
+    // a faixa mostra quem o ARQUIVO diz estar de pé, mesmo que o disparo esteja 200
+    // mensagens atrás — "quem está rodando" não pode depender de até onde você rolou
+    onPage: (page) => { for (const a of page.agents || []) agentes.track(a); },
     pageSize,
     onState,
     labels: { done: (total) => `· início da conversa · ${total} mensagens ·` },
@@ -57,10 +80,15 @@ export function createChat({
 
   // Respostas em andamento — pode haver mais de uma: escrever durante uma resposta
   // manda a mensagem NA HORA, e quem a segura até a vez dela é o outro lado.
-  const emVoo = new Set();  // { controller, bubble }
+  const emVoo = new Set();  // { controller, resposta }
   // Respostas que NÃO nasceram de uma mensagem sua (o Claude retomou por conta
   // própria). Contam como "em voo" para nada recarregar o feed em cima delas.
-  const autos = new Set();  // { bubble }
+  const autos = new Set();  // { resposta }
+  // Faixa dos agentes em segundo plano: fica no rodapé, acima da caixa, como no terminal —
+  // um agente que roda dez minutos não pode exigir rolar o feed para saber se está de pé.
+  const agentes = createAgentStrip({ onPick: () => feed.scrollToEnd() });
+  // resposta de FUNDO: hospeda blocos de agente que não pertencem a turno nenhum
+  let fundo = null;
   // botões de resposta rápida: peça própria (detecta as opções e se limpa sozinha)
   const respostasRapidas = createQuickReplyHost({
     onPick: (value) => enviar(value, composer.values()),
@@ -115,7 +143,7 @@ export function createChat({
 
     // bolha viva + tradutor do stream vêm juntos no `live-answer` (a mesma peça que
     // mostra a resposta que o Claude começa por conta própria)
-    const resposta = createLiveAnswer({ feed, onHint: (t) => composer.setHint(t) });
+    const resposta = createLiveAnswer({ feed, agents: agentes, onHint: (t) => composer.setHint(t) });
     const voo = { controller: new AbortController(), resposta };
     emVoo.add(voo);
 
@@ -146,13 +174,13 @@ export function createChat({
     /** vai no corpo rolável */
     node: feed.node,
     /** vai no rodapé fixo: respostas rápidas (quando houver) + caixa de escrever */
-    footer: el('div', { class: 'chat-foot' }, respostasRapidas.node, composer.node),
+    footer: el('div', { class: 'chat-foot' }, agentes.node, respostasRapidas.node, composer.node),
     feed,
     composer,
 
     attach(scroller) { feed.attach(scroller); return this; },
-    start() { return feed.loadFirst(); },
-    reload() { return feed.loadFirst(); },
+    start() { soltarDoDisco(); return feed.loadFirst(); },
+    reload() { soltarDoDisco(); return feed.loadFirst(); },
 
     /**
      * Envia um texto por código, com os valores atuais dos campos — o mesmo
@@ -163,6 +191,39 @@ export function createChat({
 
     /** Aviso acima da caixa de escrever (ex.: conversa aberta num terminal). */
     notice(text, kind) { composer.setNotice(text, kind); return this; },
+
+    /**
+     * Fala que entrou na conversa sem passar por esta caixa — hoje: alguém digitando no
+     * TERMINAL, na mesma conversa. Vai para o feed como mensagem normal, com a marca de
+     * onde veio: é a mesma conversa, e mostrar metade dela seria mentir.
+     */
+    peer({ role = 'user', text = '', at = null, badge = 'no terminal' } = {}) {
+      feed.append(messageBubble({ role, text, at, badge }));
+      return this;
+    },
+
+    /**
+     * O canal caiu e voltou. O que o terminal escreveu durante a queda não passou pelo
+     * canal (o seguidor novo começa do fim do arquivo), então a única fonte é o disco:
+     * relemos a conversa. **Só quando nada está em voo** — recarregar é `replaceChildren`,
+     * e em cima de uma resposta chegando apagaria da tela justamente o que você não viu.
+     */
+    resync() {
+      if (this.working()) return Promise.resolve();
+      return this.reload();
+    },
+
+    /**
+     * Evento de AGENTE que chegou fora de qualquer resposta — o disparo foi num turno que
+     * já fechou, ou a janela abriu no meio do trabalho. Mora numa resposta de FUNDO: ela
+     * nunca abre bolha (só recebe blocos) e não conta como "respondendo", senão um aviso
+     * de agente deixaria a caixa em estado de resposta para sempre.
+     */
+    agentEvent(event) {
+      fundo = fundo || createLiveAnswer({ feed, agents: agentes });
+      fundo.onEvent(event);
+      return this;
+    },
 
     /** Há resposta chegando nesta vista? (a sua ou uma que o Claude começou sozinho) */
     working: () => emVoo.size + autos.size > 0,
@@ -175,7 +236,7 @@ export function createChat({
      * cima dela.
      */
     watch({ label = 'retomou sozinho…' } = {}) {
-      const resposta = createLiveAnswer({ feed, label });
+      const resposta = createLiveAnswer({ feed, label, agents: agentes });
       const voo = { resposta };
       autos.add(voo);
       return {
@@ -197,12 +258,16 @@ export function createChat({
     destroy({ abort = true } = {}) {
       for (const voo of emVoo) {
         if (abort) voo.controller.abort();
-        voo.bubble.destroy();
+        voo.resposta.destroy();
       }
       emVoo.clear();
-      for (const voo of autos) voo.bubble.destroy();   // têm timer: sempre parar
+      for (const voo of autos) voo.resposta.destroy();   // têm timer: sempre parar
       autos.clear();
       respostasRapidas.destroy();
+      fundo?.destroy();
+      fundo = null;
+      agentes.destroy();
+      soltarDoDisco();
       feed.destroy();
     },
   };

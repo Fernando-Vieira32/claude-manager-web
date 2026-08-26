@@ -7,8 +7,10 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { routeChannelEvent } from '../public/js/core/channel-route.js';
 
-const FECHADO = { auto: false };
-const ABERTO = { auto: true };
+// o estado carrega duas coisas: bolha de turno espontâneo aberta, e "já houve conexão"
+const FECHADO = { auto: false, hello: false };
+const ABERTO = { auto: true, hello: false };
+const RECONECTADO = { auto: false, hello: true };
 
 describe('routeChannelEvent', () => {
   describe('turno espontâneo do começo ao fim', () => {
@@ -45,9 +47,44 @@ describe('routeChannelEvent', () => {
     });
   });
 
+  describe('fala digitada no terminal', () => {
+    it('vai para o feed e não abre bolha de turno', () => {
+      const r = routeChannelEvent({ type: 'peer', role: 'user', text: 'olha isso' }, FECHADO);
+      assert.deepEqual(r, { state: FECHADO, actions: ['peer'] });
+    });
+
+    it('com uma resposta em andamento, não a encerra — no terminal a mensagem entra na fila', () => {
+      const r = routeChannelEvent({ type: 'peer', role: 'user', text: 'mais uma' }, ABERTO);
+      assert.deepEqual(r, { state: ABERTO, actions: ['peer'] });
+    });
+  });
+
+  describe('agente em segundo plano', () => {
+    it('sem bolha aberta, vai para os agentes da conversa — e NÃO abre turno', () => {
+      const r = routeChannelEvent({ type: 'agentStart', id: 'a1', name: 'Lane 1' }, FECHADO);
+      assert.deepEqual(r, { state: FECHADO, actions: ['agent'] });
+    });
+
+    it('o fim dele idem: um aviso não pode acender bolha que nada apaga', () => {
+      const r = routeChannelEvent({ type: 'agentEnd', id: 'a1', result: 'fechou' }, FECHADO);
+      assert.deepEqual(r, { state: FECHADO, actions: ['agent'] });
+    });
+
+    it('com uma resposta em andamento, o bloco entra no fluxo dela', () => {
+      assert.deepEqual(routeChannelEvent({ type: 'agentStart', id: 'a1' }, ABERTO),
+        { state: ABERTO, actions: ['feed'] });
+      assert.deepEqual(routeChannelEvent({ type: 'agentEnd', id: 'a1' }, ABERTO),
+        { state: ABERTO, actions: ['feed'] });
+    });
+  });
+
   describe('estado do processo', () => {
     it('o `hello` da conexão só atualiza "está respondendo"', () => {
       assert.deepEqual(routeChannelEvent({ type: 'hello', pid: 1, busy: true }, FECHADO).actions, ['busy']);
+    });
+
+    it('e marca que já houve conexão', () => {
+      assert.deepEqual(routeChannelEvent({ type: 'hello', busy: false }, FECHADO).state, RECONECTADO);
     });
 
     it('o `busy` idem, e NÃO abre bolha', () => {
@@ -56,6 +93,31 @@ describe('routeChannelEvent', () => {
 
     it('nenhum dos dois mexe numa bolha aberta', () => {
       assert.deepEqual(routeChannelEvent({ type: 'busy', busy: true }, ABERTO).state, ABERTO);
+    });
+  });
+
+  describe('o canal caiu e voltou', () => {
+    it('o segundo `hello` pede para reler a conversa do disco', () => {
+      const r = routeChannelEvent({ type: 'hello', busy: false }, RECONECTADO);
+      assert.deepEqual(r.actions, ['busy', 'resync']);
+    });
+
+    it('porque o que o terminal escreveu na queda não passou pelo canal', () => {
+      // o seguidor novo começa do FIM do arquivo: sem reler, a janela fica desatualizada
+      // em silêncio — era o furo que fazia a conversa "não estar em tempo real"
+      let estado = { auto: false, hello: false };
+      const acoes = [];
+      for (const _ of [1, 2, 3]) {
+        const r = routeChannelEvent({ type: 'hello', busy: false }, estado);
+        estado = r.state;
+        acoes.push(r.actions.join('+'));
+      }
+      assert.deepEqual(acoes, ['busy', 'busy+resync', 'busy+resync']);
+    });
+
+    it('reconectar não mexe numa bolha aberta', () => {
+      const r = routeChannelEvent({ type: 'hello', busy: true }, { auto: true, hello: true });
+      assert.deepEqual(r.state, { auto: true, hello: true });
     });
   });
 

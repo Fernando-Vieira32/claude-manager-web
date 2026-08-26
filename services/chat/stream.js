@@ -5,11 +5,20 @@
 // mais precisa de teste — e porque o repo.js já cuidava de spawn, modos, imagens e
 // validação. Um arquivo, uma responsabilidade.
 
-import { toolFromUse, toolResultFrom } from '../../core/claude-blocks.js';
+import { toolFromUse, toolResultFrom, messageText } from '../../core/claude-blocks.js';
+import {
+  isAgentTool, agentFromUse, isLaunchAck, agentIdFromAck, parseTaskNotification,
+} from '../../core/claude-agents.js';
 
 // Só para a mensagem de erro do teto de gasto; quem monta o argumento do CLI é o
 // repo.js. Os dois leem a MESMA variável de ambiente, não uma cópia do valor.
 const MAX_USD = process.env.CHAT_MAX_USD || '';
+
+/** Blocos de uma mensagem — conteúdo em string não tem bloco nenhum (não é iterável aqui). */
+const blocksOf = (content) => (Array.isArray(content) ? content : []);
+
+/** Conteúdo cru como texto, venha string ou blocos (para achar o aviso de fim de agente). */
+const rawContent = (content) => (typeof content === 'string' ? content : messageText(content));
 
 /** Traduz o subtype de erro do `result` numa mensagem clara para o usuário. */
 function explainResult(subtype) {
@@ -83,8 +92,12 @@ export function forward(line, sse) {
           // chega inteiro como RESULTADO do próprio Agent
           if (!parentId) sse.send({ type: 'message', text: block.text });
         } else if (block?.type === 'tool_use') {
+          // Agente é outra coisa: ele trabalha por minutos e o `tool_result` dele é só o
+          // aceite do disparo. Vira evento próprio para a tela poder mostrá-lo vivo, e
+          // não como uma ferramenta que "resolveu" em três segundos.
+          if (isAgentTool(block.name)) sse.send({ type: 'agentStart', ...agentFromUse(block), parentId });
           // o `id` correlaciona com o toolResult que vem depois
-          sse.send({ type: 'tool', ...toolFromUse(block), parentId });
+          else sse.send({ type: 'tool', ...toolFromUse(block), parentId });
         }
       }
       return;
@@ -95,10 +108,23 @@ export function forward(line, sse) {
     // navegador nunca via resposta de ferramenta nenhuma.
     case 'user': {
       const parentId = event.parent_tool_use_id || null;
-      for (const block of event.message?.content || []) {
+
+      // Fim de agente: o CLI enfileira um `<task-notification>` como se fosse mensagem do
+      // usuário. É ali que vem o relatório — e é o único sinal de que ele terminou.
+      const fim = parseTaskNotification(rawContent(event.message?.content));
+      if (fim) {
+        sse.send({ type: 'agentEnd', ...fim });
+        return;
+      }
+
+      for (const block of blocksOf(event.message?.content)) {
         if (block?.type !== 'tool_result') continue;
-        // o casamento é pelo `id`; `parentId` diz em qual thread ele aconteceu
-        sse.send({ type: 'toolResult', ...toolResultFrom(block), parentId });
+        const result = toolResultFrom(block);
+        // `ack` avisa que isto é só "agente disparado", não trabalho entregue — e leva o
+        // id ESTÁVEL do agente, que é por quem o aviso de fim vai casar depois
+        const ack = isLaunchAck(result.text);
+        const agentId = ack ? agentIdFromAck(result.text) : null;
+        sse.send({ type: 'toolResult', ...result, ack, agentId, parentId });
       }
       return;
     }
