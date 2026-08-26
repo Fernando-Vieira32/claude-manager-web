@@ -54,6 +54,8 @@ public/
   js/core/chat-fields.js opções de modo e modelo (compartilhadas entre painéis)
   js/core/detect-options.js  detecta pergunta+opções (respostas rápidas)
   js/core/message-suffix.js  regra da frase fixa no fim da mensagem (pura, testada)
+  js/core/response-end.js    o que fazer quando uma resposta termina (pura, testada)
+  js/core/channel-route.js   para onde vai cada evento do canal da conversa (pura, testada)
   js/components/*.js     peças reutilizáveis: feed, bubble, composer, chat, stream-sink,
                          source-tag, toggle-text, floating-window…
   js/core/app.js         registra painéis, navegação, busca, tema, health

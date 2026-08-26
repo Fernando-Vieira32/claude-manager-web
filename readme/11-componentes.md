@@ -15,10 +15,16 @@ serviço, rota nem painel: recebe dados e callbacks, devolve nó.
 ```
 public/js/components/
   feed.js         lista paginada que cresce para cima (histórico, logs)
-  bubble.js       bolha de mensagem estática e bolha de streaming
+  bubble.js       bolha de mensagem estática e bolha de streaming (SÓ texto)
+  message-items.js  quebra uma mensagem lida do disco nos blocos dela, na ordem
+  agent-card.js   um agente como bloco próprio (relógio vivo + relatório)
+  agent-strip.js  os agentes em segundo plano da conversa (faixa do rodapé + registro)
   composer.js     caixa de escrever com campos de opção e enviar/parar
-  chat.js         feed + composer + fila de envio = vista de conversa
+  chat.js         feed + composer + envio = vista de conversa
+  live-answer.js  uma resposta chegando: bolha viva + tradutor, já dentro do feed
   stream-sink.js  traduz os eventos do stream em chamadas na bolha viva
+  quick-reply-host.js  o lugar dos botões de resposta rápida (detecta e se limpa)
+  auto-turn-watcher.js  mostra na vista o que chega pelo canal (turno que nasce sozinho)
   conversation-window.js  a janela de uma conversa (floating-window + chat + medidor + cor)
   data-table.js   tabela declarativa por colunas
   activity.js     indicador vivo "algo está acontecendo" (pulso + tempo + barra)
@@ -74,7 +80,15 @@ erro com "tentar de novo") e `append()` para itens novos no fim.
 | `attach(el)` | liga o scroll infinito ao elemento que rola |
 | `loadFirst()` / `loadMore()` | primeira janela (rola ao fim) / janela anterior |
 | `append(...nós)` | adiciona no fim; rola se você já estava no fim |
+| `remove(...nós)` | tira itens (a bolha viva que acabou sem texto) e **acerta o contador** |
+| `moveToEnd(nó)` | manda para o fim um item já contado — é como a bolha viva continua sendo a última quando um bloco novo entra na frente |
 | `scrollToEnd()` · `state()` · `destroy()` | utilidades |
+
+`onPage(page)` entrega a **página inteira** como veio do transporte, depois de desenhar —
+para quem precisa do que não é item (hoje: quais agentes estão de pé na conversa).
+
+`renderItem` pode devolver **vários nós** (uma mensagem virou prosa + ferramenta +
+agente): o feed achata a lista. Ele conta **itens**, não nós.
 
 Serve para qualquer histórico longo: mensagens hoje, saída de terminal ou lista de
 commits depois.
@@ -82,36 +96,186 @@ commits depois.
 ## `bubble.js`
 
 ```js
-messageBubble({ role: 'user', text, at, badge });          // → Node
-messageBubble(msgDaApi);   // com `tools`, já monta os chips de ferramenta resolvidos
-clearBadge(node);          // tira a etiqueta de uma bolha já montada → o próprio node
+messageBubble({ role: 'user', text, at, badge });          // → Node (só texto e imagens)
 ```
 
-`clearBadge` existe para a fila do [`chat`](#chatjs): a mensagem entra na tela com
-`badge: 'na fila'` e, quando chega a vez dela, perde a etiqueta **na mesma bolha**. A
-função vive aqui porque a marcação (`.bubble-badge`) é conhecimento desta peça — quem
-usa não deve cutucar o DOM dela.
+**Ferramenta e agente NÃO moram aqui.** A caixa de mensagem tem só o texto do main; cada
+chamada e cada agente é um bloco próprio da conversa
+([`message-items`](#message-itemsjs)). Antes vinham empilhados no pé da bolha: embrulhava
+numa caixa o que o terminal mostra separado, trocava a ordem (a chamada que veio ANTES do
+parágrafo aparecia depois dele) e enterrava um agente de doze minutos dentro de uma
+mensagem já terminada.
+
+`badge` é uma etiqueta opcional no cabeçalho da bolha. Existiu um `clearBadge(node)`
+para a fila antiga do [`chat`](#chatjs) (a mensagem entrava com `badge: 'na fila'` e
+perdia a etiqueta na vez dela); ele **foi removido** quando a fila saiu do navegador —
+hoje quem mostra a espera é a bolha de resposta, pelo evento `queued` (ver
+[`stream-sink`](#stream-sinkjs)). Uma informação, um lugar.
 
 ```js
 const b = streamBubble({ role: 'assistant' });      // → controles
 feed.append(b.node);
 b.append('pedaço de texto');   // streaming
-b.addTool('Bash', { id, input });         // compõe o tool-call (chip expansível)
-b.addTool('Bash', { id, parentId: idDoAgent });   // ANINHA dentro do chip do Agent
-b.setToolResult(id, { text, isError });   // casa o retorno pelo id do tool_use
 b.addNotice('limite de uso');  // aviso discreto
 b.setStatus('claude-opus-5');  // chip do cabeçalho
 b.setError('deu erro');        // marca a bolha
 b.finish('$0.0116 · 1 turno'); // encerra o estado "digitando"
+b.empty;                       // não escreveu nada? (aí ela sai do feed em vez de virar "(sem texto)")
 ```
 
-Quem consome um stream nunca toca no DOM: só chama esses métodos.
+Quem consome um stream nunca toca no DOM: só chama esses métodos. `startedAt` faz o
+relógio contar do começo do TURNO, e não do nascimento desta bolha — é o que permite
+trocar a bolha viva quando um bloco novo entra sem o tempo voltar a zero.
 
-**`parentId` é o que faz o subagente aninhar.** Quando ele casa com uma chamada já
-registrada, a nova entra **dentro** dela ([`tool-call`](#tool-calljs) → `addChild`); só
-aparece ao expandir o pai, como no terminal. Funciona em qualquer profundidade, porque o
-filho também fica no mapa e passa a ser pai do neto. `parentId` que não casa com ninguém
-cai no nível de cima — melhor mostrar solto que sumir.
+## `message-items.js`
+
+Uma mensagem **lida do disco** → os blocos dela na tela, na ordem em que aconteceram.
+Compõe [`bubble`](#bubblejs), [`tool-call`](#tool-calljs) e [`agent-card`](#agent-cardjs).
+
+```js
+const feed = createFeed({
+  renderItem: (m) => messageItems(m, {
+    onToggle: () => feed.scrollToEnd(),
+    keep: (card, block) => { /* tem relógio vivo: guarde para destruir */ },
+  }),
+});
+```
+
+- devolve **uma lista de nós** (o feed achata) — um por bloco (`text`, `tool`, `agent`);
+- só o **primeiro** bloco leva o cabeçalho "quem falou · quando": repetir em cada bloco
+  encheria a tela de etiquetas iguais;
+- `keep` recebe o que tem **timer** (cartão de agente ainda rodando) junto com o bloco de
+  origem. Quem monta destrói ao recarregar o feed — nó removido da tela com relógio vivo é
+  vazamento — e coloca o agente na faixa do rodapé;
+- mensagem sem `blocks` (formato antigo, ou outro caminho) continua desenhando como texto.
+
+## `agent-card.js`
+
+Um **agente** como bloco próprio da conversa: nome, tipo, relógio vivo e o relatório
+quando ele volta.
+
+```js
+const card = createAgentCard({ name: 'Lane 1', agentType: 'general-purpose', startedAt });
+feed.append(card.node);
+card.addChild(toolCall.node);                      // o que ele fez, quando se sabe
+card.finish({ summary: 'terminou', report: '…', durationMs: 726000, status: 'completed' });
+card.running;                                      // ainda de pé?
+card.destroy();                                    // tem timer: sempre
+```
+
+Existe porque agente **não** é ferramenta comum: o `tool_result` dele volta em ~3 s com o
+aceite do disparo, e o trabalho chega minutos depois num aviso separado
+([10](10-chat.md#agentes-em-segundo-plano)). Desenhado como chip, ele aparecia
+**resolvido** enquanto seguia trabalhando por doze minutos — e escondido no pé de uma
+mensagem já terminada. Cria com `running: false` para um agente que já voltou (é o caso da
+leitura do disco); `startedAt` faz o relógio contar do disparo de verdade.
+
+## `agent-strip.js`
+
+Os agentes em segundo plano **da conversa**: a faixa de "rodando agora" (acima da caixa de
+escrever, como o painel fixo do terminal) **e** o registro de qual cartão é de quem.
+
+```js
+const agentes = createAgentStrip({ onPick: () => feed.scrollToEnd() });
+agentes.track({ id, name, agentType, card, startedAt });   // entrou
+agentes.track({ id, card });        // o cartão dele foi desenhado depois: liga os dois
+agentes.alias(agentId, id);         // id ESTÁVEL do agente -> o disparo dele
+agentes.end(id, fim, agentId);      // acha por qualquer um dos dois
+agentes.end(id, { summary, report, status, durationMs });   // voltou → encerra o cartão
+agentes.has(id); agentes.size; agentes.ids();
+agentes.clear();      // o feed vai ser redesenhado
+agentes.destroy();    // tem timer: sempre
+```
+
+As duas coisas moram juntas porque o problema é um só: **o agente nasce num turno e volta
+em outro**, dez minutos depois. Com um registro por resposta, o aviso de fim chegava numa
+resposta que nunca viu o disparo — o cartão original ficava "rodando…" para sempre e o
+relatório aparecia duplicado num cartão solto. `end()` devolve `false` quando ninguém
+conhece aquele id, e aí quem chamou decide o que fazer com o relatório (nunca jogar fora).
+
+`alias` existe porque o aviso de fim casa pelo **id estável** do agente, e num agente
+RETOMADO ele vem com o id da chamada que o retomou — sem o laço, o relatório não acha o
+cartão ([10](10-chat.md#agentes-em-segundo-plano)).
+
+Entrada **sem cartão** é normal: ao abrir a conversa, a faixa é preenchida pelo resumo da
+leitura (`page.agents`) e o bloco do disparo pode estar 200 mensagens atrás. Quando ele
+finalmente é desenhado, um `track` com o `card` liga os dois — senão o aviso de fim não
+teria onde escrever e o cartão ficaria "rodando…" na tela.
+
+## `live-answer.js`
+
+Uma resposta **chegando** na tela — em **blocos**, na ordem em que as coisas acontecem:
+prosa na bolha, ferramenta e agente como blocos soltos, e a bolha viva sempre por último
+(como o spinner no pé do terminal).
+
+```js
+const resposta = createLiveAnswer({ feed, agents: agentes, onHint: (t) => composer.setHint(t) });
+await send(texto, valores, imagens, resposta.onEvent, sinal);
+resposta.finish();          // encerra o "trabalhando"; sem isto o indicador pulsa para sempre
+resposta.bubble.failed;     // terminou em erro?
+```
+
+A `bubble` que ela devolve é uma **superfície**: tem a cara da bolha de antes (`append`,
+`setActivity`, `setError`…) mais o que é de bloco (`addTool`, `addAgent`, `endAgent`).
+Assim o [`stream-sink`](#stream-sinkjs) continua sendo só tradutor, sem saber onde cada
+coisa é desenhada.
+
+Três regras de ordem que valem ler:
+
+- bolha viva que **ainda não escreveu nada** só desce quando um bloco entra (o relógio é
+  do turno, não do bloco);
+- bolha que **já tem prosa** fica onde está e a próxima nasce depois — a ordem na tela é a
+  ordem do que aconteceu. E ela **para de pulsar**: sem isso cada parágrafo deixava para
+  trás uma bolha dizendo "pensando…" para sempre, com um timer vivo por parágrafo;
+- bolha vazia no fim do turno **sai do feed** em vez de virar um "(sem texto)" solto.
+
+Existe porque nasceram **dois** lugares montando o mesmo par bolha+tradutor: a resposta
+a uma mensagem sua e a resposta que o Claude começa por conta própria (ver
+[`chat.watch`](#chatjs)). Duas cópias do mesmo desenho é o tombo que o
+[`CLAUDE.md`](../CLAUDE.md) já registra — então o desenho passou a ter um dono só.
+
+O `onHint` é opcional **de propósito**: uma resposta que você não pediu não deve mexer
+na dica da sua caixa de escrever.
+
+## `quick-reply-host.js`
+
+O lugar dos botões de resposta rápida no rodapé. Recebe o texto da última resposta,
+detecta as opções e monta os botões; sem opções, não desenha nada.
+
+```js
+const rapidas = createQuickReplyHost({ onPick: (v) => enviar(v), onWrite: () => composer.focus() });
+rodape.append(rapidas.node);
+rapidas.offer(bubble.text());   // ofereça para este texto (ou nada, se não houver opções)
+rapidas.clear();                // no envio seguinte
+```
+
+Saiu do `chat.js` por ser responsabilidade própria — detectar, montar, limpar na hora
+certa e destruir o que registrou.
+
+## `auto-turn-watcher.js`
+
+Traduz o que chega pelo **canal da conversa** em coisas na vista. O canal existe porque o
+Claude começa turnos por conta própria (agente em segundo plano que volta) — ver
+[10](10-chat.md).
+
+```js
+const observador = createAutoTurnWatcher({ chat });
+const canal = watch(observador.handle);   // transporte entra por parâmetro
+// ao fechar a janela: canal.close(); observador.destroy();
+```
+
+Não toca no DOM: só chama `chat.watch()`, `chat.working()` e `chat.composer.setBusy()`.
+Por isso tem **spec de verdade na suíte** (com um `chat` de mentira), e não arnês — ver
+[13](13-testes.md#a-saída-para-o-front-extrair-a-regra-e-testar-a-regra). A decisão de
+"que ação para qual evento" é a regra pura `core/channel-route.js`, também com spec.
+
+O `setBusy` **só liga** por conta do canal: desligar é decisão do `chat`, o único que
+sabe se ainda há um envio SEU em voo — senão o "Parar" sumia no meio da sua resposta.
+
+Pelo mesmo caminho chega o que está acontecendo **no terminal**: turno de lá abre bolha
+com o rótulo `no terminal…` (não é "retomou sozinho": são coisas diferentes e chamar
+igual confundiria as duas), e a fala digitada lá vira `chat.peer()` — sem abrir nem
+fechar bolha, porque quem digita no terminal durante uma resposta não a interrompe.
 
 ## `stream-sink.js`
 
@@ -120,7 +284,7 @@ linhas de `switch` de dentro do `chat.js`.
 
 ```js
 const onEvent = createStreamSink({
-  bubble,                                  // uma instância de streamBubble
+  bubble,                                  // a superfície da resposta (ver `live-answer`)
   onHint: (t) => composer.setHint(t),      // "modo: …", "$0.0116 · 2 turno(s)"
   onScroll: () => feed.scrollToEnd(),      // cresceu; quem rola decide se acompanha
 });
@@ -132,6 +296,17 @@ conhece composer, feed, painel nem rota: só a bolha e dois callbacks. Guarda um
 pedaço de estado — se já houve `delta` — porque depois de uma ferramenta o rótulo tem de
 voltar de "usando Bash…" para "escrevendo…". Evento de tipo desconhecido é ignorado de
 propósito: o contrato ([readme/10](10-chat.md)) pode crescer sem quebrar a tela.
+
+**`agentStart`/`agentEnd` não são ferramenta.** O tradutor manda o agente para
+`addAgent`/`endAgent` (bloco próprio + faixa do rodapé) e trata `toolResult { ack: true }`
+como o que é: o aceite do disparo, que **não** encerra ninguém. Era isso que fazia um
+agente de doze minutos parecer pronto em três segundos.
+
+**`queued` e `turnStart` existem por honestidade.** Uma mensagem mandada durante outra
+resposta chega em quem responde na hora, mas só é atendida depois — então a bolha dela
+mostra `na fila · aguardando a vez` (ou `na fila · N na frente`) e só troca para
+`pensando…` quando o `turnStart` chega. Sem isso a bolha ficaria "pensando…" desde o
+começo, inventando um trabalho que ainda não começou.
 
 Reaproveitável em qualquer lugar que mostre resposta chegando — o editor explicando um
 arquivo, um agente rodando em segundo plano.
@@ -227,13 +402,16 @@ São duas coisas diferentes, e confundi-las foi bug:
 
 | | o que faz | quando usar |
 | --- | --- | --- |
-| `setBusy(true)` | botão vira **"Enfileirar"**, aparece "Parar". A caixa **continua escrevível** | enquanto uma resposta corre — quem serializa é o [`chat`](#chatjs), que enfileira |
-| `setLocked(true, motivo)` | `disabled` na caixa e no botão; `motivo` vira o placeholder | operação que mexe na conversa e **não** aceita fila (hoje só `/compact`) |
+| `setBusy(true)` | só revela o botão "Parar". A caixa **continua escrevível** e o rótulo do botão **não muda** | enquanto uma resposta corre |
+| `setLocked(true, motivo)` | `disabled` na caixa e no botão; `motivo` vira o placeholder | operação que mexe na conversa e **não** aceita mensagem nova (hoje só `/compact`) |
 
 Antes o `setBusy` fazia `input.disabled = true`, e o resultado era o oposto do
 terminal: durante a resposta você ficava de mãos atadas, sem poder nem digitar a
-próxima mensagem. Se você precisa impedir o envio, é `setLocked` — e aí diga o
-porquê no `motivo`, senão o usuário só vê uma caixa morta.
+próxima mensagem. Depois ele trocava o rótulo para **"Enfileirar"** — o que também
+deixou de ser verdade: a mensagem escrita durante uma resposta **sai na hora**, não
+fica presa nesta caixa (ver [`chat`](#chatjs)). Chamar de "Enfileirar" mentiria sobre
+quem espera. Se você precisa impedir o envio, é `setLocked` — e aí diga o porquê no
+`motivo`, senão o usuário só vê uma caixa morta.
 
 Amanhã serve para mensagem de commit, prompt do editor ou caixa de comando — muda
 só `fields` e `onSubmit`.
@@ -284,21 +462,96 @@ pura `core/message-suffix.js`.
 o que as respostas rápidas já usavam por dentro). Serve para abrir a vista já com a
 primeira mensagem em mão — é assim que a tela de nova conversa manda a primeira.
 
-### A fila (uma resposta por vez, sem travar a caixa)
+### Mandar durante a resposta: sai na hora, a espera é do outro lado
 
-Como no terminal: você digita durante a resposta e a mensagem **espera a vez**.
+Como no terminal: escrever durante uma resposta **manda a mensagem imediatamente**. O
+`chat` não guarda nada — quem a segura até a vez dela é quem responde (no chat de
+conversas, o próprio CLI; ver [10](10-chat.md)).
 
-- mandar com uma resposta em andamento **enfileira**: a bolha já aparece na tela com a
-  etiqueta `na fila` (é o `badge` do [`bubble`](#bubblejs));
-- quando a resposta atual termina, o `chat` tira a etiqueta daquela bolha — não cria uma
-  segunda — e manda. Nunca há dois streams ao mesmo tempo na mesma conversa;
-- enquanto sobrar item na fila o botão continua "Enfileirar"; ele só volta a "Enviar"
-  quando a fila esvazia (senão o rótulo piscava entre uma mensagem e a outra);
-- `destroy()` **descarta a fila**: fechar a janela não continua mandando mensagem que
-  você não vai ver.
+- cada envio abre o **seu** stream e ganha a **sua** bolha de resposta; pode haver mais
+  de um em voo (`emVoo`), e eles aparecem na tela na ordem em que foram mandados;
+- enquanto a mensagem espera a vez, a bolha dela mostra `na fila · aguardando a vez`
+  (evento `queued`) e, quando começa de fato, volta para `pensando…` (evento
+  `turnStart`). Mostrar "pensando…" antes da hora seria inventar trabalho que não
+  existe;
+- o botão "Parar" fica de pé enquanto houver **qualquer** resposta em voo, e ele pede o
+  corte para o outro lado (`onStop`) em vez de só desligar a conexão do navegador —
+  desligar aqui não faria o trabalho parar lá;
+- as respostas rápidas só aparecem quando **nada** está em voo, senão a resposta
+  seguinte apagaria os botões no meio do caminho;
+- `destroy()` para os indicadores vivos de todas as bolhas em voo (têm timer); com
+  `abort: true` também cancela os streams;
+- **`onFinish` só é chamado quando a tela pode ser recarregada.** Os painéis usam esse
+  gancho para trocar as bolhas vivas pelas do disco, e recarregar é `replaceChildren`:
+  apaga tudo. Com outra resposta em voo isso apagaria a bolha dela; depois de um erro,
+  apagaria a explicação do erro e sobraria uma janela vazia. Quem decide é a regra pura
+  `core/response-end.js`, com spec na suíte — e a bolha informa se falhou pelo
+  `bubble.failed`.
+
+Antes a fila era **aqui**: a segunda mensagem ficava presa no navegador e só saía
+quando a primeira acabava. Era o oposto do terminal, onde a mensagem chega em quem
+responde na hora.
 
 Quem precisa de fato bloquear a escrita usa `chat.composer.setLocked(...)` — ver a
 tabela em [`composer`](#composerjs).
+
+### Resposta que você não pediu: `chat.watch()`
+
+O Claude **começa turnos por conta própria**: quando um agente que ele soltou em segundo
+plano termina, o CLI trata o aviso como uma mensagem nova e responde sem você pedir nada
+(o porquê está em [10](10-chat.md)). Esse trabalho não pertence a nenhum envio seu — e
+antes ele não aparecia em lugar nenhum: a tela congelava enquanto o Claude seguia
+trabalhando por dez minutos.
+
+```js
+const espontanea = chat.watch();                     // bolha "retomou sozinho…"
+const doTerminal = chat.watch({ label: 'no terminal…' });   // mesma peça, outra procedência
+espontanea.onEvent(evento);                 // mesmo contrato de eventos do envio normal
+espontanea.finish();                        // encerra
+chat.working();                             // há resposta chegando? (sua OU espontânea)
+chat.peer({ role: 'user', text, at });      // fala que veio de fora desta caixa
+```
+
+`chat.peer()` é para a fala que **entrou na conversa sem passar por esta caixa** — hoje:
+alguém digitando no terminal, na mesma conversa. Vai ao feed como mensagem normal, com a
+marca de onde veio: é a mesma conversa, e mostrar metade dela seria mentir.
+
+### Reconexão: `chat.resync()`
+
+```js
+chat.resync();     // relê a conversa do disco — só se nada estiver em voo
+```
+
+O canal cai e volta (servidor reiniciado, máquina suspensa, rede) e o seguidor novo começa
+a olhar do **fim** do arquivo: o que o terminal escreveu durante a queda não passou pelo
+canal. A única fonte é o disco. Quem decide que houve RE-conexão é a regra pura
+`core/channel-route.js` (um `hello` que não é o primeiro).
+
+### Agente que chega fora de qualquer resposta: `chat.agentEvent()`
+
+```js
+chat.agentEvent({ type: 'agentEnd', id, summary, result, status, durationMs });
+```
+
+O disparo de um agente acontece num turno e o aviso de fim chega em **outro** — às vezes
+em nenhum. Esses eventos moram numa "resposta de FUNDO": ela nunca abre bolha (só recebe
+blocos) e **não conta como "respondendo"**, senão um aviso de agente deixaria a caixa em
+estado de resposta para sempre. Quem acha o cartão certo é o
+[`agent-strip`](#agent-stripjs), que é o registro da conversa; sem cartão nenhum, o
+relatório vira um cartão solto — nunca lixo.
+
+A faixa dos agentes rodando fica no **rodapé** do chat (`chat.footer`), acima das respostas
+rápidas e da caixa de escrever — o mesmo lugar do painel fixo do terminal.
+
+Quem liga isso ao servidor é a janela ([`conversation-window`](#conversation-windowjs)),
+que ouve o canal da conversa. Enquanto uma bolha dessas está aberta, **o feed não é
+recarregado**: recarregar apagaria da tela justamente o que você não tinha visto.
+
+Isso é lógica de verdade embrulhada em DOM, então foi conferida por **arnês
+descartável** (27 checagens; as mutações "a caixa volta a segurar", "a caixa trava",
+"ignora o `queued`", "ignora o `turnStart`", "desliga o *respondendo* com resposta em
+voo" e "Parar só desliga a conexão daqui" acusaram todas) — ver
+[13](13-testes.md#quando-o-front-tem-lógica-de-verdade-arnês-descartável).
 
 ## `conversation-window.js`
 
@@ -320,6 +573,7 @@ const janela = createConversationWindow({
   fetchPage: (opts) => api.conversations.read(c.id, opts),
   send: (text, values, images, onEvent, signal) =>
     api.chat.send(c.id, { text, mode: values.mode, model: values.model, images }, onEvent, signal),
+  watch: (onEvent) => api.chat.events(c.id, onEvent),   // canal da conversa
   stop: () => api.chat.stop(c.id),
   onSaveSetting: (patch) => api.settings.save(c.id, patch),
   onCompact: (j) => compactar(j.meter, j.chat),
@@ -329,7 +583,35 @@ await janela.chat.start();
 janela.focus();
 ```
 
-Devolve `{ id, win, chat, meter, setId, setTitle, setHeader, focus, destroy }`.
+Devolve `{ id, win, chat, meter, setId, setTitle, setHeader, listen, focus, destroy }`.
+
+### O canal da conversa (`watch`)
+
+`watch(onEvent)` é o transporte de um canal que fica **aberto enquanto a janela viver**,
+e por ele chega tudo que acontece na conversa **sem** você pedir daqui: os turnos que o
+Claude começa por conta própria (agente em segundo plano que volta) **e o que está sendo
+feito no terminal** nesta mesma conversa — o servidor segue o `.jsonl` enquanto alguém
+ouve ([10](10-chat.md#seguir-a-conversa-que-roda-no-terminal)). Devolve `{ close() }`, e a
+janela fecha no `onClose` — quem abre, fecha.
+
+Para onde vai cada evento é a regra pura `core/channel-route.js`, com spec na suíte; a
+janela só executa as ações que ela devolve:
+
+| Ação | O que a janela faz |
+| --- | --- |
+| `open` | abre a bolha do turno espontâneo (`chat.watch()`); com `source: 'terminal'` o rótulo é **"no terminal…"**, que não é a mesma coisa que "retomou sozinho" |
+| `feed` | entrega o evento a ela |
+| `close` | encerra a bolha |
+| `peer` | põe no feed a fala que alguém digitou **no terminal** (`chat.peer()`) |
+| `agent` | entrega um `agentStart`/`agentEnd` que não pertence a turno nenhum (`chat.agentEvent()`) |
+| `busy` | liga o "Parar"; só desliga se `chat.working()` for falso |
+| `gone` | o processo encerrou (normal depois de ociosidade) — nada visível |
+
+O `busy` **só liga** por conta do canal. Desligar é decisão do `chat`, o único que sabe
+se ainda há um envio SEU em voo — senão o "Parar" sumia no meio da sua própria resposta.
+
+Conversa nova não tem id até o primeiro `init`, então o `setId` chama o `listen()`
+quando o id chega. O `listen()` é idempotente: chamar duas vezes não abre dois canais.
 
 Três coisas que valem saber:
 
@@ -408,7 +690,7 @@ Uma chamada de ferramenta dentro de uma mensagem: chip clicável que abre o **pe
 e o **resultado**. Genérico — não sabe o nome de nenhuma ferramenta, então serve para
 `Bash`, `Edit` e para um subagente (`Agent`) igualmente. O `summary` chega **pronto**
 por parâmetro: quem decide o que resume é quem traduziu o stream
-([`core/claude-blocks.js`](10-chat.md#ferramentas-e-subagentes-o-que-dá-para-ver)), não
+([`core/claude-blocks.js`](10-chat.md#ferramentas-o-que-dá-para-ver)), não
 o componente — ele não sabe que existe uma ferramenta chamada "Agent".
 
 ```js
@@ -437,27 +719,30 @@ visíveis, todas de propósito:
 - a seção "passos" **não existe** numa ferramenta comum: nasce escondida e só aparece
   quando chega o primeiro filho, então um `Bash` solto não ganha caixa vazia;
 - o componente **não sabe** o que é subagente: recebe um nó pronto e dá o lugar. Quem
-  decide quem é filho de quem é a [`bubble`](#bubblejs), pelo `parentId` do stream.
+  decide quem é filho de quem é a [`live-answer`](#live-answerjs), pelo `parentId` do stream.
 
 Aninha em qualquer profundidade — agente que chama agente vira mais um nível, sem código
 novo, porque cada filho é um `tool-call` completo.
 
 
-Quem compõe é a [`bubble`](#bubblejs), pelos dois caminhos:
+Quem compõe são duas peças, uma por caminho — e em **nenhum** dos dois o chip mora dentro
+da bolha: ele é um bloco da conversa (`.feed-block`), como no terminal.
 
-- **ao vivo** (`streamBubble`): `addTool(name, { id, input, … })` e depois
-  `setToolResult(id, payload)`. A bolha resolve e destrói todas no
-  `finish()`/`setError()`/`destroy()`;
-- **no histórico** (`messageBubble`): recebe `tools: [{ id, name, input, result }]` da
-  API e já monta cada chip resolvido. Aqui **não** há `destroy()` — o listener do
-  `tool-call` está no próprio nó dele, então morre quando o feed remove a bolha. Só o
-  que escuta `document`/`window` ou usa timer precisa de destruição explícita.
+- **ao vivo** ([`live-answer`](#live-answerjs)): `addTool(name, { id, parentId, input, … })`
+  e depois `setToolResult(id, payload)`. Ela resolve as que ficaram sem retorno e destrói
+  tudo no `finish()`/`destroy()`;
+- **no histórico** ([`message-items`](#message-itemsjs)): recebe o bloco
+  `{ kind: 'tool', id, name, input, result }` da API e monta o chip já resolvido. Aqui
+  **não** há `destroy()` — o listener do `tool-call` está no próprio nó dele, então morre
+  quando o feed remove o bloco. Só o que escuta `document`/`window` ou usa timer precisa
+  de destruição explícita (é o caso do [`agent-card`](#agent-cardjs), que tem relógio).
 
 Três decisões de honestidade (regra 8 do projeto):
 
 - enquanto não há retorno, o resultado diz **"executando…"** — não "vazio";
 - ao fim do stream, o que não voltou vira **"sem resultado registrado neste stream"** —
-  que é a verdade para subagente em background, cujo retorno é só o recibo de início;
+  e o agente de segundo plano nem passa por aqui: ele tem cartão próprio, porque o retorno
+  da ferramenta dele é só o recibo de início ([`agent-card`](#agent-cardjs));
 - texto cortado no teto ganha a marca *"… cortado no limite de exibição"*, em vez de
   fingir que aquilo era o conteúdo inteiro.
 

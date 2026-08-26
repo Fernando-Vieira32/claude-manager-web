@@ -24,6 +24,7 @@ import { createColorPicker } from './color-picker.js';
 import { createToggleText } from './toggle-text.js';
 import { createFloatingWindow } from './floating-window.js';
 import { applySuffix } from '../core/message-suffix.js';
+import { createAutoTurnWatcher } from './auto-turn-watcher.js';
 
 // Uma janela por conversa. O registro vive AQUI, e não no painel, senão abrir pela
 // lista e depois pela tela de nova conversa daria duas janelas da mesma conversa.
@@ -57,6 +58,7 @@ export function createConversationWindow({
   swatches = [],
   fetchPage,
   send,
+  watch,
   stop,
   onSaveSetting,
   onCompact,
@@ -123,6 +125,12 @@ export function createConversationWindow({
     onFinish: () => onFinish?.(api),
   });
 
+  // Canal da conversa: por ele chega o que o Claude faz SEM você pedir (turno que ele
+  // começa sozinho quando um agente em segundo plano volta). Quem traduz isso em tela é
+  // o `auto-turn-watcher`; aqui só se abre e se fecha a conexão.
+  let canal = null;
+  const observador = createAutoTurnWatcher({ chat });
+
   const colorPicker = createColorPicker({
     value: settings.color || '',
     swatches,
@@ -138,6 +146,9 @@ export function createConversationWindow({
     actions: [sufixo.node, colorPicker.node],
     onClose: () => {
       if (api.id) abertas.delete(api.id);
+      canal?.close();                   // quem abre, fecha: o canal é uma conexão viva
+      canal = null;
+      observador.destroy();
       chat.destroy({ abort: false });   // fechar não interrompe a resposta em curso
       meter.destroy();
       colorPicker.destroy();
@@ -167,7 +178,20 @@ export function createConversationWindow({
     setId(novo) {
       if (!novo || api.id === novo) return api;
       api.id = novo;
-      if (win.isOpen()) abertas.set(novo, api);
+      if (win.isOpen()) {
+        abertas.set(novo, api);
+        api.listen();     // conversa nova: só agora existe id para ouvir
+      }
+      return api;
+    },
+
+    /**
+     * Liga o canal desta conversa (idempotente). Fica ligado enquanto a janela viver:
+     * é como o trabalho que o Claude faz por conta própria chega até a tela.
+     */
+    listen() {
+      if (canal || !watch || !api.id) return api;
+      canal = watch((ev) => observador.handle(ev));
       return api;
     },
 
@@ -182,6 +206,7 @@ export function createConversationWindow({
   };
 
   if (id) abertas.set(id, api);
+  api.listen();
   return api;
 }
 

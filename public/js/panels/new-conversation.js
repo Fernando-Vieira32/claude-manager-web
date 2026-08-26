@@ -95,6 +95,10 @@ export default {
           }, signal);
         },
 
+        // o canal só existe depois do primeiro `init` (é ele que dá o id); quem chama
+        // é o `setId` da janela
+        watch: (onEvent) => api.chat.events(id, onEvent),
+
         stop: () => (id ? api.chat.stop(id) : Promise.resolve()),
         onSaveSetting: (patch) => (id ? api.settings.save(id, patch) : Promise.resolve())
           .catch((err) => toast(`Não deu para salvar a configuração: ${err.message}`, { type: 'err' })),

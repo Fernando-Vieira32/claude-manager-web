@@ -176,6 +176,8 @@ export default {
         fetchPage: (opts) => api.conversations.read(c.id, opts),
         send: (text, values, images, onEvent, signal) =>
           api.chat.send(c.id, { text, mode: values.mode, model: values.model, images }, onEvent, signal),
+        // canal da conversa: o que o Claude faz sem você pedir também aparece
+        watch: (onEvent) => api.chat.events(c.id, onEvent),
         stop: () => api.chat.stop(c.id),
         onSaveSetting: (patch) => api.settings.save(c.id, patch)
           // só a cor aparece na lista; não vale redesenhar 60 linhas por trocar de modo

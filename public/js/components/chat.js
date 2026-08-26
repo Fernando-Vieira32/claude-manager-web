@@ -6,16 +6,18 @@
 // serviço de conversas + chat; amanhã serve para o editor conversar sobre um
 // arquivo, ou para um agente qualquer.
 //
-// Os eventos que `send` entrega a `onEvent` (o que o /api/chat emite) são
-// traduzidos pelo `stream-sink.js`; o contrato está em readme/10-chat.md.
+// Cada resposta na tela é um `live-answer` (bolha viva + tradutor de eventos); o
+// contrato dos eventos está em readme/10-chat.md.
 
 import { el } from '../core/ui.js';
 import { createFeed } from './feed.js';
 import { createComposer } from './composer.js';
-import { messageBubble, streamBubble, clearBadge } from './bubble.js';
-import { createQuickReplies } from './quick-replies.js';
-import { createStreamSink } from './stream-sink.js';
-import { detectOptions } from '../core/detect-options.js';
+import { messageBubble } from './bubble.js';
+import { messageItems } from './message-items.js';
+import { createLiveAnswer } from './live-answer.js';
+import { createQuickReplyHost } from './quick-reply-host.js';
+import { createAgentStrip } from './agent-strip.js';
+import { afterResponse } from '../core/response-end.js';
 
 /**
  * @param {object} opts
@@ -38,7 +40,7 @@ export function createChat({
   send,
   onStop,
   fields = [],
-  renderMessage = messageBubble,
+  renderMessage = messageItems,
   onState,
   onFinish,
   beforeSend,
@@ -47,38 +49,51 @@ export function createChat({
   allowImages = true,
   pageSize = 20,
 } = {}) {
+  // Blocos lidos do disco que têm relógio vivo (cartão de agente ainda rodando). Quem
+  // criou destrói: recarregar o feed troca os nós, e timer de nó removido é vazamento.
+  let doDisco = [];
+  const soltarDoDisco = () => {
+    agentes.clear();                                        // a faixa é redesenhada com o feed
+    for (const item of doDisco.splice(0)) item.destroy?.();
+  };
+
   const feed = createFeed({
     fetchPage,
-    renderItem: renderMessage,
+    renderItem: (item) => renderMessage(item, {
+      // cartão de agente lido do disco: o relógio é nosso para parar, e se ele ainda
+      // está rodando entra na faixa do rodapé como qualquer outro
+      keep: (card, block) => {
+        doDisco.push(card);
+        if (card.running) {
+          agentes.track({ id: block.id, name: block.name, agentType: block.agentType, card, startedAt: block.startedAt });
+        }
+      },
+      onToggle: () => feed.scrollToEnd(),
+    }),
+    // a faixa mostra quem o ARQUIVO diz estar de pé, mesmo que o disparo esteja 200
+    // mensagens atrás — "quem está rodando" não pode depender de até onde você rolou
+    onPage: (page) => { for (const a of page.agents || []) agentes.track(a); },
     pageSize,
     onState,
     labels: { done: (total) => `· início da conversa · ${total} mensagens ·` },
   });
 
-  let controller = null;
-  let liveBubble = null;
-  let rodando = false;      // uma resposta por vez
-  const fila = [];          // mensagens digitadas durante a resposta
-  let quickReplies = null;
-  const qrHost = el('div', { class: 'qr-host' });
-
-  function clearQuickReplies() {
-    quickReplies?.destroy();
-    quickReplies = null;
-    qrHost.replaceChildren();
-  }
-
-  // ao terminar uma resposta, se ela for uma pergunta com opções, oferece botões
-  function offerQuickReplies(text) {
-    const options = detectOptions(text);
-    if (!options.length) return;
-    quickReplies = createQuickReplies({
-      options,
-      onPick: (value) => { clearQuickReplies(); run(value, composer.values()); },
-      onWrite: () => composer.focus(),
-    });
-    qrHost.replaceChildren(quickReplies.node);
-  }
+  // Respostas em andamento — pode haver mais de uma: escrever durante uma resposta
+  // manda a mensagem NA HORA, e quem a segura até a vez dela é o outro lado.
+  const emVoo = new Set();  // { controller, resposta }
+  // Respostas que NÃO nasceram de uma mensagem sua (o Claude retomou por conta
+  // própria). Contam como "em voo" para nada recarregar o feed em cima delas.
+  const autos = new Set();  // { resposta }
+  // Faixa dos agentes em segundo plano: fica no rodapé, acima da caixa, como no terminal —
+  // um agente que roda dez minutos não pode exigir rolar o feed para saber se está de pé.
+  const agentes = createAgentStrip({ onPick: () => feed.scrollToEnd() });
+  // resposta de FUNDO: hospeda blocos de agente que não pertencem a turno nenhum
+  let fundo = null;
+  // botões de resposta rápida: peça própria (detecta as opções e se limpa sozinha)
+  const respostasRapidas = createQuickReplyHost({
+    onPick: (value) => enviar(value, composer.values()),
+    onWrite: () => composer.focus(),
+  });
 
   const composer = createComposer({
     placeholder,
@@ -86,95 +101,72 @@ export function createChat({
     submitLabel,
     allowImages,
     onStop: onStop || send ? () => cancel() : undefined,
-    onSubmit: (text, values, images) => run(text, values, images),
+    onSubmit: (text, values, images) => enviar(text, values, images),
   });
 
+  /**
+   * Interrompe a resposta que está sendo escrita agora. Quem corta é o outro lado
+   * (`onStop`), não o navegador: assim o "interrompido" ainda chega na bolha, e as
+   * mensagens que você já mandou continuam valendo. Desligar só a conexão daqui
+   * seria fechar os olhos — do outro lado o trabalho continuaria.
+   */
   async function cancel() {
-    controller?.abort();
+    const atual = [...emVoo][0];   // a mais antiga é a que está sendo respondida
+    if (!onStop) {
+      atual?.controller.abort();
+      return;
+    }
     try {
-      await onStop?.();
-    } catch { /* já pode ter terminado */ }
+      await onStop();
+    } catch {
+      atual?.controller.abort();   // não deu para cortar lá: desliga o stream daqui
+    }
   }
 
   /**
-   * Envia — ou ENFILEIRA, se uma resposta já está correndo. É o comportamento do
-   * terminal: você digita durante a resposta e a mensagem espera a vez. Antes a
-   * caixa travava até a resposta acabar.
+   * Envia — SEMPRE na hora, mesmo com uma resposta em andamento. É o comportamento
+   * do terminal: a mensagem vai direto para quem responde, e ele a pega quando
+   * termina o passo atual. Antes a fila era AQUI e a mensagem só saía quando a
+   * resposta anterior acabava; agora a espera acontece do outro lado, e a bolha da
+   * mensagem nova mostra "na fila" enquanto isso (evento `queued` do stream).
    */
-  function run(cru, values, images = []) {
+  async function enviar(cru, values, images = []) {
     // transforma ANTES de tudo: a bolha que aparece na tela e o que sai no envio
-    // têm de ser o mesmo texto — mostrar uma coisa e mandar outra seria mentira,
-    // e a fila guarda o texto já pronto
+    // têm de ser o mesmo texto — mostrar uma coisa e mandar outra seria mentira
     const text = beforeSend ? beforeSend(cru, values) : cru;
-    if (rodando) {
-      const urls = images.map((im) => `data:${im.media_type};base64,${im.data}`);
-      const node = messageBubble({
-        role: 'user', text, at: new Date().toISOString(), images: urls, badge: 'na fila',
-      });
-      feed.append(node);
-      feed.scrollToEnd();
-      fila.push({ text, values, images, node });
-      return Promise.resolve();
-    }
-    return ciclo(text, values, images, null);
-  }
-
-  /** Uma resposta por vez: termina uma, puxa a próxima da fila, até esvaziar. */
-  async function ciclo(text, values, images, node) {
-    rodando = true;
-    let atual = { text, values, images, node };
-    try {
-      while (atual) {
-        await enviar(atual.text, atual.values, atual.images, atual.node);
-        atual = fila.shift() || null;
-      }
-    } finally {
-      rodando = false;
-    }
-  }
-
-  async function enviar(text, values, images = [], jaNaTela = null) {
-    clearQuickReplies();
+    respostasRapidas.clear();
     composer.setBusy(true);
     composer.setHint('enviando…');
 
-    // se veio da fila, a bolha já está na tela: só tira o "na fila"
-    if (jaNaTela) clearBadge(jaNaTela);
-    else {
-      const urls = images.map((im) => `data:${im.media_type};base64,${im.data}`);
-      feed.append(messageBubble({ role: 'user', text, at: new Date().toISOString(), images: urls }));
-    }
+    const urls = images.map((im) => `data:${im.media_type};base64,${im.data}`);
+    feed.append(messageBubble({ role: 'user', text, at: new Date().toISOString(), images: urls }));
 
-    const bubble = streamBubble({ role: 'assistant' });
-    liveBubble = bubble;
-    feed.append(bubble.node);
-    feed.scrollToEnd();
-
-    controller = new AbortController();
-    // a tradução dos eventos do stream vive no `stream-sink` (peça separada)
-    const onEvent = createStreamSink({
-      bubble,
-      onHint: (t) => composer.setHint(t),
-      onScroll: () => feed.scrollToEnd(),
-    });
+    // bolha viva + tradutor do stream vêm juntos no `live-answer` (a mesma peça que
+    // mostra a resposta que o Claude começa por conta própria)
+    const resposta = createLiveAnswer({ feed, agents: agentes, onHint: (t) => composer.setHint(t) });
+    const voo = { controller: new AbortController(), resposta };
+    emVoo.add(voo);
 
     let interrupted = false;
     try {
-      await send(text, values, images, onEvent, controller.signal);
+      await send(text, values, images, resposta.onEvent, voo.controller.signal);
     } catch (err) {
       interrupted = true;
-      if (err.name === 'AbortError') bubble.addNotice('interrompido');
-      else bubble.setError(err.message || String(err));
+      if (err.name === 'AbortError') resposta.bubble.addNotice('interrompido');
+      else resposta.bubble.setError(err.message || String(err));
+      composer.setHint('');   // senão fica "enviando…" para sempre depois da falha
     } finally {
-      controller = null;
-      liveBubble = null;
-      bubble.finish();
-      // com fila cheia continuamos "respondendo": não pisca o rótulo para "Enviar"
-      if (!fila.length) composer.setBusy(false);
-      feed.scrollToEnd();
-      onFinish?.();
-      // se a resposta foi uma pergunta com opções, oferece botões de resposta rápida
-      if (!interrupted) offerQuickReplies(bubble.text());
+      emVoo.delete(voo);
+      resposta.finish();
+      // a decisão é regra pura e mora no core/response-end.js (com teste na suíte):
+      // recarregar o feed em cima de uma resposta em voo, ou de um erro, apaga da tela
+      // informação que o usuário precisava ver
+      const fim = afterResponse({
+        interrupted, failed: resposta.bubble.failed, inFlight: emVoo.size + autos.size,
+      });
+      if (fim.idle) composer.setBusy(false);
+      if (fim.reload) onFinish?.();
+      if (fim.quickReplies) respostasRapidas.offer(resposta.bubble.text());
     }
   }
 
@@ -182,38 +174,100 @@ export function createChat({
     /** vai no corpo rolável */
     node: feed.node,
     /** vai no rodapé fixo: respostas rápidas (quando houver) + caixa de escrever */
-    footer: el('div', { class: 'chat-foot' }, qrHost, composer.node),
+    footer: el('div', { class: 'chat-foot' }, agentes.node, respostasRapidas.node, composer.node),
     feed,
     composer,
 
     attach(scroller) { feed.attach(scroller); return this; },
-    start() { return feed.loadFirst(); },
-    reload() { return feed.loadFirst(); },
+    start() { soltarDoDisco(); return feed.loadFirst(); },
+    reload() { soltarDoDisco(); return feed.loadFirst(); },
 
     /**
      * Envia um texto por código, com os valores atuais dos campos — o mesmo
      * caminho do clique em "Enviar" e das respostas rápidas. Serve para quem abre
      * a vista já com uma primeira mensagem (e imagens) em mão.
      */
-    submit(text, images = []) { return run(text, composer.values(), images); },
+    submit(text, images = []) { return enviar(text, composer.values(), images); },
 
     /** Aviso acima da caixa de escrever (ex.: conversa aberta num terminal). */
     notice(text, kind) { composer.setNotice(text, kind); return this; },
 
     /**
-     * Encerra a vista. `abort: false` NÃO interrompe uma resposta em andamento —
+     * Fala que entrou na conversa sem passar por esta caixa — hoje: alguém digitando no
+     * TERMINAL, na mesma conversa. Vai para o feed como mensagem normal, com a marca de
+     * onde veio: é a mesma conversa, e mostrar metade dela seria mentir.
+     */
+    peer({ role = 'user', text = '', at = null, badge = 'no terminal' } = {}) {
+      feed.append(messageBubble({ role, text, at, badge }));
+      return this;
+    },
+
+    /**
+     * O canal caiu e voltou. O que o terminal escreveu durante a queda não passou pelo
+     * canal (o seguidor novo começa do fim do arquivo), então a única fonte é o disco:
+     * relemos a conversa. **Só quando nada está em voo** — recarregar é `replaceChildren`,
+     * e em cima de uma resposta chegando apagaria da tela justamente o que você não viu.
+     */
+    resync() {
+      if (this.working()) return Promise.resolve();
+      return this.reload();
+    },
+
+    /**
+     * Evento de AGENTE que chegou fora de qualquer resposta — o disparo foi num turno que
+     * já fechou, ou a janela abriu no meio do trabalho. Mora numa resposta de FUNDO: ela
+     * nunca abre bolha (só recebe blocos) e não conta como "respondendo", senão um aviso
+     * de agente deixaria a caixa em estado de resposta para sempre.
+     */
+    agentEvent(event) {
+      fundo = fundo || createLiveAnswer({ feed, agents: agentes });
+      fundo.onEvent(event);
+      return this;
+    },
+
+    /** Há resposta chegando nesta vista? (a sua ou uma que o Claude começou sozinho) */
+    working: () => emVoo.size + autos.size > 0,
+
+    /**
+     * Abre uma bolha para uma resposta que **não** nasceu de uma mensagem sua — o
+     * Claude retomou por conta própria (um agente em segundo plano voltou). Devolve o
+     * mesmo `onEvent` do stream normal, então quem observa o canal da conversa não
+     * precisa saber desenhar nada; e enquanto ela existe, o feed não é recarregado em
+     * cima dela.
+     */
+    watch({ label = 'retomou sozinho…' } = {}) {
+      const resposta = createLiveAnswer({ feed, label, agents: agentes });
+      const voo = { resposta };
+      autos.add(voo);
+      return {
+        onEvent: resposta.onEvent,
+        /** Encerra a bolha: sem isto o indicador vivo pulsaria para sempre. */
+        finish(resumo) { autos.delete(voo); resposta.finish(resumo); },
+        destroy() { autos.delete(voo); resposta.destroy(); },
+      };
+    },
+
+    /**
+     * Encerra a vista. `abort: false` NÃO interrompe as respostas em andamento —
      * deixa o Claude terminar em segundo plano (grava no .jsonl); fechar a janela
      * não mata o processo. `abort: true` (padrão) cancela de fato.
+     *
+     * O `destroy()` das bolhas acontece nos dois casos: elas saem da tela junto com
+     * o feed, e o indicador vivo tem um timer que precisa parar de qualquer jeito.
      */
     destroy({ abort = true } = {}) {
-      if (abort) {
-        controller?.abort();
-        liveBubble?.destroy();
+      for (const voo of emVoo) {
+        if (abort) voo.controller.abort();
+        voo.resposta.destroy();
       }
-      liveBubble = null;
-      // quem foi fechado não continua mandando: a fila morre com a vista
-      fila.length = 0;
-      clearQuickReplies();
+      emVoo.clear();
+      for (const voo of autos) voo.resposta.destroy();   // têm timer: sempre parar
+      autos.clear();
+      respostasRapidas.destroy();
+      fundo?.destroy();
+      fundo = null;
+      agentes.destroy();
+      soltarDoDisco();
       feed.destroy();
     },
   };

@@ -1,6 +1,6 @@
 // Opções dos campos do chat, compartilhadas entre painéis (nova conversa e
 // conversas). Ficam num só lugar para não divergirem — espelham o back:
-//   - modos de permissão: services/chat/repo.js (MODE_POLICIES) e o terminal
+//   - modos de permissão: services/chat/args.js (MODE_POLICIES) e o terminal
 //     (`claude --permission-mode`)
 //   - modelos: aliases aceitos por `claude --model`
 

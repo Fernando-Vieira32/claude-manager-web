@@ -169,15 +169,32 @@ curl -s "localhost:7788/api/conversations/$ID?limit=5&before=5"
   "from": 90,
   "to": 110,
   "hasMore": true,
+  "agents": [
+    { "id": "toolu_03…", "name": "Lane 2 colisão e tenant", "agentType": "general-purpose",
+      "startedAt": "2026-…" }
+  ],
   "messages": [
-    { "index": 90, "role": "user", "text": "…", "at": "2026-…", "human": true },
     {
-      "index": 91, "role": "assistant", "text": "", "at": "2026-…", "human": false,
-      "tools": [
+      "index": 90, "role": "user", "at": "2026-…", "human": true,
+      "blocks": [{ "kind": "text", "text": "solte as três frentes" }]
+    },
+    {
+      "index": 91, "role": "assistant", "at": "2026-…", "human": false,
+      "blocks": [
+        { "kind": "text", "text": "Vou escrever o contrato antes de despachar:" },
         {
+          "kind": "tool",
           "id": "toolu_01…", "name": "Bash", "summary": "Listar arquivos",
           "input": "{\n  \"command\": \"ls -la\"\n}", "inputTruncated": false,
           "result": { "text": "total 20\ndrwxrwxr-x …", "truncated": false, "isError": false }
+        },
+        {
+          "kind": "agent",
+          "id": "toolu_02…", "name": "Lane 1 resolução do tipo",
+          "agentType": "general-purpose", "model": "opus",
+          "running": false, "status": "completed",
+          "summary": "Agent \"Lane 1\" finished", "report": "Lane 1 fechada. Rubocop limpo.",
+          "startedAt": "2026-…", "durationMs": 726000
         }
       ]
     }
@@ -185,21 +202,39 @@ curl -s "localhost:7788/api/conversations/$ID?limit=5&before=5"
 }
 ```
 
-**Ferramentas vêm estruturadas em `tools`** (só quando a mensagem usou alguma):
+**Uma mensagem vem em `blocks`, na ordem em que as coisas aconteceram.** Três tipos:
 
-- `input` é o que foi pedido, já em texto; `result` é o que voltou, ou `null` se a
-  ferramenta ainda não devolveu (resposta em andamento);
-- `summary` é a frase curta que o chip mostra ao lado do nome (pode ser `null`); a regra
-  de escolha está em [10 · Chat](10-chat.md#ferramentas-e-subagentes-o-que-dá-para-ver);
-- o par é casado pelo `id` (o `tool_use_id` do CLI): o resultado vive numa entrada
-  `user` do `.jsonl`, e a leitura o costura de volta na chamada em vez de virar uma
-  mensagem solta;
+| `kind` | O quê |
+| --- | --- |
+| `text` | prosa. É o que vai na caixa de mensagem — e **só** isso |
+| `tool` | uma chamada de ferramenta: `input` (o pedido, já em texto), `result` (o que voltou, ou `null` se ainda não voltou), `summary` (a frase curta do chip) |
+| `agent` | um subagente: `name` é o que ele foi fazer, `running` diz se ainda está de pé, `report`/`summary` é o que ele devolveu, `durationMs` quanto levou e `status` como terminou (`completed`, `failed` ou **`unknown`** = sem aviso de fim no arquivo) |
+
+Por que blocos, e não `text` + `tools` como antes: empilhar as ferramentas no pé da
+mensagem embrulhava numa caixa o que o terminal mostra separado, **trocava a ordem** (a
+chamada que veio antes do parágrafo aparecia depois dele) e enterrava um agente de doze
+minutos dentro de uma mensagem já terminada.
+
+- o par chamada/resultado é casado pelo `id` (o `tool_use_id` do CLI): o resultado vive
+  numa entrada `user` do `.jsonl`, e a leitura o costura de volta na chamada em vez de
+  virar uma mensagem solta;
+- **agente não é ferramenta.** O `tool_result` de um agente de segundo plano é só o aceite
+  do disparo ("Async agent launched successfully"); o trabalho chega muito depois, num
+  `<task-notification>` que casa pelo mesmo `id` — e é dali que saem `report`, `summary` e
+  `status`. Tratar o aceite como resultado era o que fazia o agente parecer pronto em 3 s
+  ([10 · Chat](10-chat.md#agentes-em-segundo-plano));
+- `durationMs` sai dos dois carimbos do próprio transcript (disparo → aviso), não de
+  palpite; sem os dois, vem `null`;
+- **`agents` (fora de `messages`) é quem está de pé na conversa INTEIRA**, não na página:
+  é o que a janela mostra na faixa do rodapé. Sem isso, reabrir uma conversa com quatro
+  agentes rodando desde 200 mensagens atrás não mostrava nada — "quem está rodando" não
+  pode depender de até onde você rolou;
 - teto de 4000 caracteres por lado (`MAX_DETAIL` em `core/claude-blocks.js`), com
   `inputTruncated`/`truncated` avisando quando cortou;
-- uma mensagem que **só** usou ferramenta tem `text` vazio e **não** é descartada —
-  antes ela virava o texto `⚙ Bash` e o detalhe não existia;
-- é o mesmo formato que o chat emite ao vivo ([10](10-chat.md#eventos-do-stream)), então
-  a interface tem um só caminho de render para conversa ao vivo e conversa relida.
+- mensagem que **só** usou ferramenta não é descartada: ela tem bloco, mesmo sem prosa;
+- é o mesmo desenho que o chat emite ao vivo ([10](10-chat.md#eventos-do-stream)) — lá em
+  eventos (`tool`, `agentStart`, `agentEnd`), aqui em blocos —, então a interface desenha
+  conversa ao vivo e conversa relida com as mesmas peças.
 
 A janela é contada **do fim para o começo**, como um feed:
 
@@ -224,8 +259,9 @@ A janela é contada **do fim para o começo**, como um feed:
 - as mensagens legíveis ficam em cache por `mtime` (até 8 arquivos), então paginar
   não relê o `.jsonl` a cada rolagem.
 
-Bloco `thinking` é omitido. Ferramenta **não** entra no `text`: sai em `tools` (acima),
-e o `tool_result` é costurado no `result` da chamada em vez de descartado.
+Bloco `thinking` é omitido. Ferramenta e agente **não** entram no texto: são blocos
+próprios (acima), e o `tool_result` é costurado no `result` da chamada em vez de
+descartado.
 
 Deletar e restaurar:
 
@@ -277,13 +313,67 @@ curl -s -X POST localhost:7788/api/conversations/trash/purge \
 | POST | `/api/chat` | **inicia** uma conversa nova `{ cwd, text, mode, model, images }` em SSE |
 | POST | `/api/chat/:id` | envia `{ text, mode, model, images }` e transmite a resposta em SSE |
 | POST | `/api/chat/:id/compact` | compacta o contexto (`/compact`), em SSE |
-| POST | `/api/chat/:id/stop` | interrompe a execução em andamento |
-| GET | `/api/chat` | execuções em andamento |
+| POST | `/api/chat/:id/stop` | interrompe o turno em andamento |
+| GET | `/api/chat` | processos de chat vivos |
+| GET | `/api/chat/:id/events` | **canal da conversa** em SSE (turnos que o CLI começa sozinho) |
 | GET | `/api/chat/:id/status` | `{ running }` |
 
 `mode` é o modo de permissão (`none`/`plan`/`auto`/`acceptEdits`); `images` é opcional,
 uma lista `[{ media_type, data }]` (base64) anexada à mensagem. Detalhes, eventos do
 stream, modos, imagens e custo em [10 · Chat](10-chat.md).
+
+**As rotas não mudaram de forma, mudaram de semântica** quando o chat passou a manter um
+processo `claude` vivo por conversa ([10 · Chat](10-chat.md#mandar-mensagem-durante-a-resposta)):
+
+- **`POST /api/chat/:id` durante uma resposta não dá mais 409.** A mensagem vai para o
+  stdin do processo na hora e o CLI a enfileira; o SSE do turno que espera recebe
+  `queued` (`{ ahead: N }`) e depois `turnStart` quando chega a vez dele. O 409 sobrou
+  para trocar de **modo/modelo** com a conversa respondendo e para cruzar chat com
+  `/compact` (que é execução única, porque reescreve o transcript);
+- **`POST /api/chat/:id/stop` interrompe o turno e preserva a fila.** É um
+  `control_request` no stdin, não `SIGTERM`: o turno em voo termina com
+  `result` `subtype: 'interrupted'` e o próximo da fila começa. Vale para o turno corrente,
+  **inclusive quando ele nasceu no CLI**. A porta é a mesma do `/status` (`working`), então
+  o botão que aparece na tela nunca dá 404: sem nada para cortar vem `stopped: false`. Sem
+  processo vivo nenhum, 404;
+- **`GET /api/chat/:id/status` é "trabalhando agora"**, não "tem processo vivo" nem "tem
+  fila". É o `working` do runner: `busy` **ou** uma linha do stdout nos últimos
+  `CHAT_QUIET_MS` (30 s). Precisou mudar porque o CLI abre turnos por conta própria — com
+  a fila vazia e o Claude trabalhando, o antigo `busy` respondia `false` e o painel
+  escondia o **Parar** justamente na hora em que ele era necessário
+  ([10 · Chat](10-chat.md#turnos-que-nascem-sozinhos-o-cli-começa-por-conta-própria));
+- **`GET /api/chat/:id/events` é o canal da conversa** (SSE que fica aberto): primeiro
+  evento `hello`, depois `autoStart` → eventos do turno → `result` → `autoEnd` para cada
+  turno que o CLI começa sozinho, mais `busy` (`{ busy, pending }`) quando esse estado
+  muda e `gone` quando o processo encerra. No meio vêm os eventos normais do stream
+  (`delta`, `message`, `tool`, `toolResult`, `notice`, `system`, `result`) — só os do turno
+  espontâneo, porque o que pertence a um turno seu já vai no SSE daquele turno. Fechar a
+  conexão apenas desinscreve, **nunca** mata processo; há keep-alive a cada ~25 s.
+  **Enquanto este canal está aberto o servidor também segue o `.jsonl` da conversa**, e é
+  assim que o que você faz **no terminal** aparece na janela sem fechar e abrir: o turno de
+  lá vem como `autoStart { source: 'terminal' }` → eventos → `autoEnd`, e o que você digita
+  lá vem como `peer { role, text, at }`
+  ([10 · Chat](10-chat.md#seguir-a-conversa-que-roda-no-terminal));
+- **`GET /api/chat` lista os processos vivos** e mudou de formato:
+
+```json
+{ "items": [ { "id": "-home-fernando:57316179-…", "pid": 45497,
+               "startedAt": "2026-08-25T12:00:00.000Z", "kind": "chat",
+               "busy": true, "working": true, "auto": false, "pending": 2,
+               "lastOutputAt": "2026-08-25T12:03:11.004Z" } ] }
+```
+
+| Campo | O quê |
+| --- | --- |
+| `kind` | `chat` (processo vivo) ou `compact` (execução única) |
+| `busy` | tem turno em curso: **fila não vazia OU turno espontâneo rodando** |
+| `working` | `busy` ou saída recente (`CHAT_QUIET_MS`) — é o que o `/status` responde |
+| `auto` | o turno em curso nasceu no CLI, não numa mensagem sua |
+| `pending` | turnos **seus** na fila (contando o em voo) |
+| `lastOutputAt` | última linha lida do stdout (`null` no `compact`) |
+
+`busy: false` com `working: false` é um processo quente que vai sair sozinho depois de
+`CHAT_IDLE_MS` de silêncio.
 
 ## Arquivos (`fs`)
 
