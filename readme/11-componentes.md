@@ -690,7 +690,7 @@ Uma chamada de ferramenta dentro de uma mensagem: chip clicável que abre o **pe
 e o **resultado**. Genérico — não sabe o nome de nenhuma ferramenta, então serve para
 `Bash`, `Edit` e para um subagente (`Agent`) igualmente. O `summary` chega **pronto**
 por parâmetro: quem decide o que resume é quem traduziu o stream
-([`core/claude-blocks.js`](10-chat.md#ferramentas-e-subagentes-o-que-dá-para-ver)), não
+([`core/claude-blocks.js`](10-chat.md#ferramentas-o-que-dá-para-ver)), não
 o componente — ele não sabe que existe uma ferramenta chamada "Agent".
 
 ```js
@@ -719,27 +719,30 @@ visíveis, todas de propósito:
 - a seção "passos" **não existe** numa ferramenta comum: nasce escondida e só aparece
   quando chega o primeiro filho, então um `Bash` solto não ganha caixa vazia;
 - o componente **não sabe** o que é subagente: recebe um nó pronto e dá o lugar. Quem
-  decide quem é filho de quem é a [`bubble`](#bubblejs), pelo `parentId` do stream.
+  decide quem é filho de quem é a [`live-answer`](#live-answerjs), pelo `parentId` do stream.
 
 Aninha em qualquer profundidade — agente que chama agente vira mais um nível, sem código
 novo, porque cada filho é um `tool-call` completo.
 
 
-Quem compõe é a [`bubble`](#bubblejs), pelos dois caminhos:
+Quem compõe são duas peças, uma por caminho — e em **nenhum** dos dois o chip mora dentro
+da bolha: ele é um bloco da conversa (`.feed-block`), como no terminal.
 
-- **ao vivo** (`streamBubble`): `addTool(name, { id, input, … })` e depois
-  `setToolResult(id, payload)`. A bolha resolve e destrói todas no
-  `finish()`/`setError()`/`destroy()`;
-- **no histórico** (`messageBubble`): recebe `tools: [{ id, name, input, result }]` da
-  API e já monta cada chip resolvido. Aqui **não** há `destroy()` — o listener do
-  `tool-call` está no próprio nó dele, então morre quando o feed remove a bolha. Só o
-  que escuta `document`/`window` ou usa timer precisa de destruição explícita.
+- **ao vivo** ([`live-answer`](#live-answerjs)): `addTool(name, { id, parentId, input, … })`
+  e depois `setToolResult(id, payload)`. Ela resolve as que ficaram sem retorno e destrói
+  tudo no `finish()`/`destroy()`;
+- **no histórico** ([`message-items`](#message-itemsjs)): recebe o bloco
+  `{ kind: 'tool', id, name, input, result }` da API e monta o chip já resolvido. Aqui
+  **não** há `destroy()` — o listener do `tool-call` está no próprio nó dele, então morre
+  quando o feed remove o bloco. Só o que escuta `document`/`window` ou usa timer precisa
+  de destruição explícita (é o caso do [`agent-card`](#agent-cardjs), que tem relógio).
 
 Três decisões de honestidade (regra 8 do projeto):
 
 - enquanto não há retorno, o resultado diz **"executando…"** — não "vazio";
 - ao fim do stream, o que não voltou vira **"sem resultado registrado neste stream"** —
-  que é a verdade para subagente em background, cujo retorno é só o recibo de início;
+  e o agente de segundo plano nem passa por aqui: ele tem cartão próprio, porque o retorno
+  da ferramenta dele é só o recibo de início ([`agent-card`](#agent-cardjs));
 - texto cortado no teto ganha a marca *"… cortado no limite de exibição"*, em vez de
   fingir que aquilo era o conteúdo inteiro.
 
