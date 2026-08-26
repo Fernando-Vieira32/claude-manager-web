@@ -1,0 +1,6 @@
+# `data/` e `.env` são desta máquina — o container usa volume próprio.
+data/
+.env
+.git/
+node_modules/
+*.log

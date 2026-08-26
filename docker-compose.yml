@@ -1,0 +1,37 @@
+# Suba com `./docker-app.sh` (Linux/Mac) ou `docker-app.cmd` (Windows): eles criam o
+# `.env` e abrem a janela. Com o `.env` pronto, `docker compose up -d` também serve.
+# Explicação de cada escolha em readme/14-docker.md.
+
+services:
+  app:
+    build: .
+    image: claude-manager-web
+    container_name: claude-manager-web
+
+    # No Linux, o uid do dono: o que o chat editar em `work/` sai como arquivo dele,
+    # não de root. No Windows/Mac o Docker Desktop já traduz dono, e isto é inofensivo.
+    user: "${APP_UID:-1000}:${APP_GID:-1000}"
+
+    environment:
+      # Libera os modos "automático" e "aceitar edições": o Claude edita arquivo e roda
+      # comando direto, SEM perguntar. Ponha 0 para deixar o chat só-leitura.
+      CHAT_ALLOW_FULL_TOOLS: "${CHAT_ALLOW_FULL_TOOLS:-1}"
+
+    volumes:
+      # Login e conversas. É o que faz o `claude login` valer para sempre.
+      - claude-home:/home/claude
+      # A sua pasta de código, do lado de fora. Sem ela o Claude não tem no que mexer.
+      - "${WORK_DIR:?defina WORK_DIR no .env: a pasta do seu código}:/home/claude/work"
+      # Preferências por conversa (cor, modo) e catálogo de modelos em cache.
+      - app-data:/app/data
+
+    # App, não site: só quem está nesta máquina alcança a porta. Não troque por
+    # "7788:7788" — o painel não tem autenticação (ver readme/07-seguranca.md).
+    ports:
+      - "127.0.0.1:${PORT:-7788}:7788"
+
+    restart: unless-stopped
+
+volumes:
+  claude-home:
+  app-data:

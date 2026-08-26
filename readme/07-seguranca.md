@@ -12,6 +12,15 @@ alcançável de fora da máquina. **Não** exponha em `0.0.0.0` nem coloque atr�
 túnel/proxy sem antes adicionar autenticação — qualquer um com acesso à porta pode
 matar processos e ler suas conversas.
 
+### No container é a mesma regra
+
+A imagem sobe com `HOST=0.0.0.0` — mas **só** porque o `-p` do Docker não alcançaria o
+processo de outro jeito. Quem limita é o compose, que publica em `127.0.0.1:7788`. Trocar
+essa linha por `"7788:7788"` põe o painel na rede local **sem autenticação nenhuma**: é
+exatamente o que o parágrafo acima proíbe. E o container não é sandbox: com a pasta de
+código montada e os modos automático/aceitar-edições ligados, ele mexe nos seus arquivos
+como qualquer processo local — ver [14 · Docker](14-docker.md).
+
 ## Encerrar sessões
 
 - Só mata PIDs que o próprio serviço listou como sessão do Claude: o `kill` refaz o
