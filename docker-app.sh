@@ -69,11 +69,22 @@ avisar_login() {
 }
 
 # Janela de app (sem barra de endereço) quando houver navegador que suporte.
+# `setsid` porque o navegador tem de sobreviver ao fim deste script: sem isso ele morre
+# junto com o shell que o chamou (e num lançador .desktop nem chega a aparecer).
+solto() {
+  if command -v setsid >/dev/null 2>&1; then
+    setsid "$@" >/dev/null 2>&1 < /dev/null &
+  else
+    nohup "$@" >/dev/null 2>&1 < /dev/null &
+  fi
+  disown 2>/dev/null || true
+}
+
 abrir() {
   for nav in google-chrome chromium chromium-browser brave-browser microsoft-edge; do
-    command -v "$nav" >/dev/null 2>&1 && { "$nav" --app="$URL" >/dev/null 2>&1 & return 0; }
+    command -v "$nav" >/dev/null 2>&1 && { solto "$nav" --app="$URL"; return 0; }
   done
-  command -v xdg-open >/dev/null 2>&1 && { xdg-open "$URL" >/dev/null 2>&1 & return 0; }
+  command -v xdg-open >/dev/null 2>&1 && { solto xdg-open "$URL"; return 0; }
   echo "abra $URL no navegador"
 }
 
