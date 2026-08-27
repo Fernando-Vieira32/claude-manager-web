@@ -1,0 +1,15 @@
+# Modo desenvolvedor: o código do repositório entra POR CIMA da imagem e o servidor
+# reinicia sozinho ao salvar. É o mesmo `npm run dev` de sempre, só que dentro.
+#
+# Não use direto: `./docker-app.sh dev` (ele junta este arquivo com o de cima) e
+# `./docker-app.sh test` (roda a suíte com o código montado, não com o da imagem).
+
+services:
+  app:
+    volumes:
+      # O código de verdade, editado fora. Sem isto, mexer num arquivo não muda nada
+      # até reconstruir a imagem.
+      - ./:/app
+    command: ["node", "--watch", "server.js"]
+    environment:
+      NODE_ENV: development

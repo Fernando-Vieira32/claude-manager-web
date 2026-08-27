@@ -1,77 +1,92 @@
-# 14 · Docker (rodar em qualquer PC)
+# 14 · Docker (usar e desenvolver em container)
 
 [← sumário](README.md)
 
-Jeito de entregar o app para outra pessoa **sem ela instalar nada além do Docker** —
-nem Node, nem o CLI do Claude. Funciona igual em Linux, Windows e Mac.
+Jeito de entregar o app para outra pessoa **sem ela instalar Node nem o CLI do Claude** —
+e de ela também mexer no código do projeto. Basta ter Docker.
 
-Se você vai rodar na sua própria máquina, com o Claude Code que já está instalado nela,
-o caminho continua sendo o [12 · Rodar em uma máquina nova](12-rodar-em-maquina-nova.md):
-é mais direto e enxerga as conversas que você já tem.
+**Alvo: Linux.** Windows e Mac não estão contemplados por decisão de simplificar; o que
+travaria lá está no fim desta página.
+
+Se você vai rodar na sua própria máquina, com o Claude Code que já está instalado nela, o
+caminho mais direto continua sendo o [12 · Rodar em uma máquina nova](12-rodar-em-maquina-nova.md).
 
 ## A decisão que define tudo: o CLI vai DENTRO da imagem
 
-Um container Linux **não executa o binário do host**: no Windows o `claude` é um `.exe`,
-no Mac é Mach-O. Não é problema de caminho nem de montagem — é formato de executável.
-Usar o `claude` já instalado na máquina só funcionaria em Linux.
+A imagem carrega o próprio Claude Code, em vez de usar o que está instalado na máquina.
+Assim o colega não instala nada e todo mundo roda a mesma versão. A consequência honesta:
 
-Por isso a imagem carrega o próprio Claude Code. A consequência honesta:
+> **O container é uma máquina.** Ele tem o Claude dele, o login dele e as conversas dele.
+> As conversas que você já fez no terminal de fora **não aparecem** — o `~/.claude` é outro.
 
-> **O container é uma máquina.** Ele tem o Claude dele, o login dele e as conversas
-> dele. As conversas que você já fez no terminal de fora **não aparecem** — os caminhos
-> e o `~/.claude` são outros.
+O que ele não carrega é credencial: a imagem é limpa e pode ser compartilhada. O login mora
+no volume `claude-home`, feito uma vez por quem usa.
 
-O que ele não carrega é credencial: a imagem é limpa e pode ser compartilhada. O login
-mora no volume `claude-home`, feito uma vez por quem usa.
-
-## Subir
+## Usar
 
 ```bash
-./docker-app.sh          # Linux/Mac  — constrói se preciso, sobe e abre a janela
-docker-app.cmd           # Windows
+./docker-app.sh          # constrói se preciso, sobe e abre a janela
+./docker-app.sh login    # uma vez: login do Claude dentro do container
 ```
-
-Na primeira vez ele cria um `.env` com a sua pasta de código e avisa que falta login:
-
-```bash
-./docker-app.sh login    # docker-app.cmd login no Windows
-```
-
-Depois é só `./docker-app.sh` sempre que quiser abrir. Outros comandos:
 
 | Comando | O que faz |
 | --- | --- |
 | `./docker-app.sh` | sobe (se preciso) e abre a janela do app |
+| `./docker-app.sh dev` | **modo desenvolvedor** (abaixo) |
+| `./docker-app.sh test` | roda `npm test` dentro, no código montado |
 | `./docker-app.sh login` | login do Claude dentro do container — uma vez só |
 | `./docker-app.sh parar` | desliga; login e conversas ficam nos volumes |
 | `./docker-app.sh log` | acompanha o log do servidor |
 
-Com o `.env` já criado, `docker compose up -d` também funciona — o script só existe
-para gerar o `.env`, esperar o healthcheck e abrir a janela.
+Com o `.env` já criado, `docker compose up -d` também funciona — o script existe para gerar
+o `.env`, esperar o healthcheck e abrir a janela.
+
+## Desenvolver
+
+```bash
+./docker-app.sh dev      # código montado, servidor reinicia ao salvar, log na tela
+./docker-app.sh test     # a suíte, no código que você acabou de editar
+```
+
+O modo dev junta o `docker-compose.yml` com o `docker-compose.dev.yml`: este último monta o
+repositório por cima do `/app` da imagem e troca o comando por `node --watch server.js`. É o
+mesmo `npm run dev` de sempre, só que dentro do container — salvou, reiniciou, sem
+reconstruir imagem. O `Ctrl+C` só para de seguir o log; o container continua de pé
+(`./docker-app.sh parar` desliga).
+
+O `test` roda a suíte **no código montado**, não no que foi copiado para a imagem — então
+vale para o que você acabou de escrever. Nada de teste automático antes de subir: igual ao
+fluxo nativo, você roda quando quer.
 
 ## O `.env` (é desta máquina, não vai no repo)
 
 | Variável | Para quê | Padrão |
 | --- | --- | --- |
-| `WORK_DIR` | pasta do **seu código**, do lado de fora; vira `~/work` dentro | seu home |
-| `APP_UID` / `APP_GID` | no Linux, para o que o chat editar sair como arquivo seu, não de root | seu uid/gid |
+| `WORK_DIR` | pasta que aparece dentro como `~/work` | seu home |
+| `APP_UID` / `APP_GID` | para o que o chat editar sair como arquivo seu, não de root | seu uid/gid |
 | `PORT` | porta em `127.0.0.1` | `7788` |
 | `CHAT_ALLOW_FULL_TOOLS` | `1` libera automático/aceitar-edições; `0` deixa o chat só-leitura | `1` |
 
-**Vale estreitar o `WORK_DIR`.** O padrão é o home inteiro porque funciona para todo
-mundo, mas o Claude trata a pasta montada como *workspace* — se ela for o seu home, o seu
-`~/.claude/settings.json` pessoal vira "configuração do projeto" lá dentro e o CLI reclama
-("Ignoring N permissions.allow entries…"). Apontar `WORK_DIR` para `~/dev`, `~/www` ou
-o que for a sua pasta de código resolve e é mais limpo.
+### Por que o padrão é o home inteiro
+
+Dentro do container, o app enxerga **o sistema de arquivos do container** — e lá só existe o
+que foi montado. O seletor de pastas ("de qual repositório esta conversa começa?") só
+consegue listar o que `WORK_DIR` entregou. Montar o home devolve a mesma árvore de fora, que
+é o comportamento de quem roda nativo.
+
+O preço, dito na cara: **`~/.ssh` e `~/.claude` vão junto**, e o Claude de dentro alcança os
+dois. Foi uma escolha consciente — esconder o `~/.ssh` quebraria o `git push` feito de
+dentro. Quem preferir trocar comodidade por fechamento é só apontar `WORK_DIR` para uma pasta
+de código (`~/dev`, `~/www`…): o resto do home deixa de existir para o container.
 
 ## Como o container é montado (e por quê)
 
 | Peça do `docker-compose.yml` | Por quê |
 | --- | --- |
 | volume `claude-home` → `/home/claude` | login (`.credentials.json`), conversas e `~/.claude.json` sobrevivem ao `docker rm` |
-| bind `${WORK_DIR}` → `/home/claude/work` | sem código montado, o Claude não tem no que mexer |
-| volume `app-data` → `/app/data` | preferências por conversa (cor/modo) e o catálogo de modelos em cache |
-| `user: uid:gid` | Linux: arquivos editados saem seus. Windows/Mac: o Docker Desktop já traduz dono |
+| bind `${WORK_DIR}` → `/home/claude/work` | sem código montado, o seletor de pastas abre vazio |
+| volume `app-data` → `/app/data` | preferências por conversa (cor/modo) e catálogo de modelos em cache |
+| `user: uid:gid` | arquivos editados saem seus, não de root |
 | `ports: 127.0.0.1:PORT:7788` | **app, não site** — o painel não tem autenticação (ver [07 · Segurança](07-seguranca.md)) |
 | `HOST=0.0.0.0` na imagem | só para o `-p` alcançar o processo dentro do container; quem limita é a linha acima |
 | `DISABLE_AUTOUPDATER=1` | rodando como usuário comum, o autoupdate não escreveria em `/usr/local/lib` — só geraria erro |
@@ -79,12 +94,10 @@ o que for a sua pasta de código resolve e é mais limpo.
 
 ## O que muda em relação a rodar direto na máquina
 
-- **Conversas do terminal de fora não aparecem.** É outro `~/.claude`. Só se juntam se
-  você (em Linux ou WSL) montar o home de verdade — aí o caminho precisa ser idêntico
-  dentro e fora, porque o transcript guarda `cwd` absoluto (`core/claude-paths.js`).
-- **O painel Sessões mostra os processos do container**, não os do seu terminal. É
-  coerente: dentro do container, o Claude que existe é o de lá.
-- **Caminhos aparecem como `/home/claude/work/…`**, que é onde o seu código está montado.
+- **Conversas do terminal de fora não aparecem.** É outro `~/.claude`.
+- **O painel Sessões mostra os processos do container**, não os do seu terminal. É coerente:
+  dentro do container, o Claude que existe é o de lá.
+- **Caminhos aparecem como `/home/claude/work/…`**, que é onde o seu home está montado.
 
 ## Atualizar, parar, apagar
 
@@ -100,18 +113,20 @@ docker compose down -v                # APAGA os volumes: login e conversas do c
 | --- | --- |
 | `failed to bind host port 127.0.0.1:7788: address already in use` | já tem servidor nessa porta (o `./start.sh` nativo, por exemplo). Pare o outro ou mude `PORT` no `.env` |
 | chat responde `Not logged in · Please run /login` | falta o `./docker-app.sh login` |
+| build falha em `apt-get`/`npm install` com erro de conexão | a rede barra o Docker Hub ou o registro do npm (comum em rede corporativa com proxy). Saída sem depender da rede: quem já construiu roda `docker save claude-manager-web \| gzip > app.tgz` e passa o arquivo; do outro lado, `docker load < app.tgz` e `docker compose up -d` |
 | `defina WORK_DIR no .env` ao subir | `.env` ausente ou sem `WORK_DIR` — rode pelo `docker-app.sh`, que o cria |
-| arquivos editados saem de outro dono (Linux) | `APP_UID`/`APP_GID` no `.env` não são os seus (`id -u`, `id -g`) |
+| arquivos editados saem de outro dono | `APP_UID`/`APP_GID` no `.env` não são os seus (`id -u`, `id -g`) |
 | painel Conversas vazio na primeira vez | esperado: o container começa sem conversa nenhuma |
 
-## O que foi verificado
+## Por que só Linux (por enquanto)
 
-Construído e subido de verdade (imagem ~573 MB, `claude 2.1.246` dentro):
+Nada aqui é impossível fora do Linux, mas cada item custa trabalho e teste:
 
-- `/api/_health` e `/api/_services` respondendo, com os 6 serviços;
-- `/api/fs` enxergando `~/work` com as pastas de fora — o bind está certo;
-- `/api/sessions` funcionando (o `ps` existe na imagem);
-- **chat até o fim do encanamento**: `POST /api/chat` gerou `init` (pid, cwd
-  `/home/claude/work`), `system` com o modelo e parou em `Not logged in` — ou seja,
-  binário encontrado, `spawn` certo, SSE traduzido. O que falta testar é o turno
-  completo, que depende do `login` (fluxo de navegador, feito pelo dono).
+- **`node --watch` em bind mount** no Docker Desktop (WSL2/Mac) pode não receber o evento do
+  arquivo — o modo dev precisaria de polling;
+- **fim de linha CRLF** no clone em Windows quebra os scripts `.sh` sem um `.gitattributes`;
+- **`uid`/`gid`** não têm o mesmo sentido no Docker Desktop;
+- **desempenho de bind mount no Mac** é notoriamente pior, e o modo dev depende dele.
+
+Quando alguém precisar de verdade, o caminho é esse — não é remendo novo, é testar esses
+quatro pontos.

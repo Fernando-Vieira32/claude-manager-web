@@ -7,10 +7,10 @@ para cá. Pode ser seguido por uma pessoa ou entregue direto ao Claude Code ("le
 `readme/12-rodar-em-maquina-nova.md` e deixe rodando"). É Node puro: **sem dependências,
 sem `npm install`, sem build**.
 
-> **Entregando para outra pessoa?** Se ela não tem (nem quer ter) Node e o CLI do Claude
-> instalados, existe o caminho de container: [14 · Docker](14-docker.md). Lá o Claude Code
-> vai **dentro da imagem**, então roda em Windows e Mac também — em troca, o container tem
-> as conversas dele, não as que você já tem no terminal.
+> **Entregando para outra pessoa (Linux)?** Se ela não tem (nem quer ter) Node e o CLI do
+> Claude instalados, existe o caminho de container: [14 · Docker](14-docker.md). Lá o Claude
+> Code vai **dentro da imagem** — em troca, o container tem as conversas dele, não as que
+> você já tem no terminal. Serve também para mexer no código do projeto sem instalar nada.
 
 ## O que este app é (e do que depende)
 
