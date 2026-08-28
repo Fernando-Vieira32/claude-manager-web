@@ -1,5 +1,6 @@
 import os from 'node:os';
 import path from 'node:path';
+import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 const home = os.homedir();
@@ -9,9 +10,17 @@ const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 // CLAUDE_CONFIG_DIR: o teste aponta para uma pasta temporária e não encosta na sua.
 const dataDir = process.env.DATA_DIR || path.join(rootDir, 'data');
 
+// Este app só roda em container (ver readme/14-docker.md). A marca vem da imagem;
+// o `/.dockerenv` é reserva para quem construir a imagem de outro jeito.
+const inContainer = process.env.IN_CONTAINER === '1' || existsSync('/.dockerenv');
+
 export const config = {
   host: process.env.HOST || '127.0.0.1',
   port: Number(process.env.PORT || 7788),
+  inContainer,
+  // Caminho do repositório na máquina de fora — dentro do container tudo é /app, e o
+  // front precisa do caminho de verdade para montar o comando de ligar o servidor.
+  hostRoot: process.env.HOST_PROJECT_DIR || null,
   home,
   rootDir,
   claudeDir,

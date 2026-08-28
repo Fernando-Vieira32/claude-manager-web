@@ -31,11 +31,10 @@ para o projeto poder crescer até virar um editor de código no navegador.
 ## Atalhos rápidos
 
 ```bash
-./start.sh                  # sobe o servidor e abre o navegador
-./docker-app.sh             # o mesmo, em container (ver 14) — para entregar a outra pessoa
-npm run dev                 # servidor com --watch (reinicia ao salvar)
-npm test                    # suíte de testes (ver 13) — sem instalar nada
-PORT=9000 npm start         # outra porta
+./docker-app.sh             # sobe o container e abre o navegador (ver 14)
+./docker-app.sh dev         # modo desenvolvedor: reinicia ao salvar
+./docker-app.sh test        # suíte de testes dentro do container (ver 13)
+#   outra porta: troque PORT no .env
 curl -s localhost:7788/api/_services | less   # mapa das rotas registradas
 ```
 

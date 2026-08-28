@@ -7,8 +7,8 @@
 O servidor não está de pé:
 
 ```bash
-cd ~/www/personal/claude-manager-web && ./start.sh
-tail -20 /tmp/claude-manager-web.log
+./docker-app.sh          # sobe (ou só abre a janela, se já estiver de pé)
+./docker-app.sh log      # o que o servidor disse
 ```
 
 ## `EADDRINUSE: address already in use 127.0.0.1:7788`
@@ -17,48 +17,33 @@ Já existe uma instância (ou outro programa na porta):
 
 ```bash
 ss -ltnp | grep 7788                  # quem está lá
-kill $(ss -ltnp | grep 7788 | sed -E 's/.*pid=([0-9]+).*/\1/')
-PORT=7799 npm start                   # ou só use outra porta
+docker ps --filter publish=7788        # é um container?
+# ou só use outra porta: troque PORT no .env e rode ./docker-app.sh
 ```
 
 ## Chat e compactar pararam de funcionar (erro "não encontrei o binário claude")
 
-Os dois chamam o CLI `claude`. Se o **servidor foi iniciado com um PATH mínimo**
-(por um atalho, `systemd`, cron…) que não inclui a pasta do `claude` — em geral
-`~/.npm-global/bin` —, ele não acha o binário e todo chat/compact falha com
-`spawn claude ENOENT`.
-
-O servidor já tenta resolver o caminho sozinho (PATH + locais conhecidos). Se mesmo
-assim não achar:
+Dentro do container isso é raro: o CLI `claude` vem **na imagem**, em `/usr/local/bin`, e o
+servidor o encontra sozinho. Se acontecer, veja o que o container está vendo:
 
 ```bash
-which claude                 # descubra o caminho real
-CLAUDE_BIN=/caminho/para/claude ./start.sh   # aponte explicitamente
+docker compose exec app which claude     # esperado: /usr/local/bin/claude
+docker compose exec app claude --version
 ```
 
-O jeito mais simples de evitar isso é subir pelo **seu terminal normal**
-(`./start.sh`), onde o PATH já inclui o `claude`.
-
-### Se o `claude` vem do nvm (caso do atalho `.desktop`)
-
-Um `.desktop` do GNOME **não** carrega `~/.zshrc`/`~/.bashrc`, então o PATH é o da
-sessão: sem o nvm. Aí `node` cai no do sistema (que pode ser antigo demais para o
-servidor) e o `claude` simplesmente não existe — e os locais de fallback do
-`services/chat/repo.js` (`~/.npm-global/bin`, `~/.local/bin`, `~/.claude/local`,
-`/usr/local/bin`) não cobrem o nvm.
-
-O `start.sh` resolve isso: se não achar node 18+ **e** o `claude`, ele carrega o
-`~/.nvm/nvm.sh` antes de subir, e o servidor herda o PATH já corrigido. Por isso o
-atalho deve sempre chamar o `start.sh`, nunca `node server.js` direto.
-
-Para checar como o servidor **em execução** está vendo o mundo:
+Se o binário sumiu (imagem antiga, build interrompido), reconstrua:
 
 ```bash
-SRV=$(pgrep -f 'node server.js' | head -1)
-ls -l /proc/$SRV/exe                          # qual node subiu (quer v18+)
-tr '\0' '\n' < /proc/$SRV/environ | grep PATH  # o claude está nesse PATH?
+docker compose build --no-cache && ./docker-app.sh
 ```
 
+Para apontar outro caminho — por exemplo um `claude` do seu home, montado —, acrescente
+`CLAUDE_BIN` ao bloco `environment:` do `docker-compose.yml`. A ordem de resolução está em
+`services/chat/repo.js`: `CLAUDE_BIN` → `PATH` → locais conhecidos.
+
+> Antes da dockerização este era o erro mais comum, por causa de `.desktop`/`systemd` sem
+> o PATH do nvm. Esse problema deixou de existir: o ambiente agora é o da imagem, igual
+> para todo mundo.
 ## A lista de sessões vem vazia
 
 - Confirme que existe sessão: `ps -eo pid,tty,args | grep '[c]laude'`.
@@ -94,7 +79,7 @@ mv ~/.claude/.trash-conversas/20260818-121230_-home-fernando_e313d208-….jsonl 
 
 Os estáticos vão com `cache-control: no-cache`, mas o navegador guarda módulos ES
 em memória. `Ctrl+Shift+R` resolve. Se editou arquivo do servidor, ele precisa
-reiniciar — use `npm run dev`.
+reiniciar — use `./docker-app.sh dev`, que reinicia ao salvar.
 
 ## Um serviço novo não aparece
 

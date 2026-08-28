@@ -736,7 +736,8 @@ Componente burro: não faz `fetch` nem conhece rota. Quem monta (`core/app.js`) 
 **Nota honesta (regra 8):** quando o servidor está **fora**, a página **não consegue
 religá-lo** — o navegador não abre programas do PC, e não há ninguém escutando para
 receber o clique. Por isso o estado `down` mostra **"▶ ligar"** que apenas dispara
-`onStart`; o `app.js` trata copiando o comando `./start.sh` para você colar no terminal.
+`onStart`; o `app.js` trata copiando o comando `cd <hostRoot> && ./docker-app.sh` (o
+`hostRoot` vem do `/api/_services`) para você colar no terminal.
 Desligar e reiniciar funcionam de verdade (o servidor vivo executa a ação).
 
 ## Como criar um componente novo

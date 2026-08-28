@@ -10,11 +10,12 @@ veja [07](07-seguranca.md)).
 | Método | Rota | O quê |
 | --- | --- | --- |
 | GET | `/api/_health` | ping: `{ ok, uptime }` |
-| GET | `/api/_services` | serviços registrados, rotas, resumos e `root` (raiz do projeto) |
+| GET | `/api/_services` | serviços registrados, rotas, resumos, `root` (dentro do container) e `hostRoot` (raiz na máquina) |
 
 `/api/_services` é a documentação viva: o painel **Serviços** só desenha o que
-essa rota devolve. O campo `root` é usado pelo indicador de status para montar o
-comando de iniciar (`cd <root> && ./start.sh`).
+essa rota devolve. `root` é a raiz **dentro** do container (`/app`); `hostRoot` é a pasta
+do repositório **na máquina** — o indicador de status usa esse para montar o comando de
+ligar (`cd <hostRoot> && ./docker-app.sh`), que é o único que faz sentido de fora.
 
 ## Sistema
 
@@ -24,11 +25,12 @@ Controle do próprio processo — usado pelo indicador de status no rodapé
 | Método | Rota | O quê |
 | --- | --- | --- |
 | POST | `/api/_server/stop` | responde `{ ok, stopping }` e encerra o processo |
-| POST | `/api/_server/restart` | sobe uma instância nova destacada (assume em ~1s) e encerra a atual |
+| POST | `/api/_server/restart` | responde `{ ok, restarting }` e encerra com código 1 — o Docker sobe de novo |
 
-`restart` herda o ambiente (ex.: `CHAT_ALLOW_FULL_TOOLS`). **Religar de fora** (quando
-o servidor está desligado) não é possível pela API — nada está escutando; use o
-terminal (`./start.sh`).
+`restart` depende da política do container (`restart: on-failure` no compose): sair com
+código 1 é o pedido de "me suba de novo", e o ambiente vem do compose outra vez. `stop`
+sai com 0 justamente para **não** ser ressuscitado. **Religar de fora** não é possível pela
+API — nada está escutando; use `./docker-app.sh`.
 
 ## Sessões
 

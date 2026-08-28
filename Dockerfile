@@ -33,10 +33,12 @@ RUN mkdir -p /app/data && chmod 0777 /app/data
 # o processo. Quem limita a exposição é o compose, que publica só em 127.0.0.1.
 # O autoupdate fica desligado porque rodamos como usuário comum: ele não conseguiria
 # escrever em /usr/local/lib e só geraria erro a cada disparo.
+# IN_CONTAINER é o que o server.js exige para subir: fora daqui ele se recusa a rodar.
 ENV HOST=0.0.0.0 \
     PORT=7788 \
     NODE_ENV=production \
-    DISABLE_AUTOUPDATER=1
+    DISABLE_AUTOUPDATER=1 \
+    IN_CONTAINER=1
 
 EXPOSE 7788
 

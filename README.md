@@ -5,10 +5,13 @@ Painel local para gerenciar o Claude Code: **sessões abertas** (listar e encerr
 navegador**) e **lixeira** (restaurar ou apagar de vez o que passou da retenção).
 Node puro + ES modules — sem dependências, sem build.
 
+Roda **em container** — é o único jeito suportado, e a única coisa que você precisa ter
+instalada é o Docker (ver [14 · Docker](readme/14-docker.md)).
+
 ```bash
-./start.sh          # sobe o servidor e abre http://127.0.0.1:7788
-npm run dev         # servidor com --watch
-npm test            # suíte de testes (runner embutido do Node, sem instalar nada)
+./docker-app.sh          # sobe e abre http://127.0.0.1:7788
+./docker-app.sh dev      # modo desenvolvedor: reinicia ao salvar
+./docker-app.sh test     # suíte de testes dentro do container
 ```
 
 ## Documentação
@@ -31,6 +34,7 @@ para nenhum ficar gigante:
 | 11 | [Componentes](readme/11-componentes.md) | peças reutilizáveis da interface |
 | 12 | [Máquina nova](readme/12-rodar-em-maquina-nova.md) | runbook de setup em outro computador |
 | 13 | [Testes](readme/13-testes.md) | `npm test`, o sandbox que isola seus dados, RSpec → `node:test` |
+| 14 | [Docker](readme/14-docker.md) | **como rodar**: usar e desenvolver em container, e por que só Linux |
 
 ## Estrutura em 10 linhas
 

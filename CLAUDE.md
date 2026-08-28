@@ -44,6 +44,11 @@ desacoplado e reaproveitável** — não é enfeite, é o plano.
    fizer sentido (`return api`). Comentário explica o *porquê*, não o *o quê*.
 10. **Atualize o README junto com o código.** Mexeu num componente/rota/contrato,
     documente em `readme/` no mesmo passo — com exemplo de uso de verdade.
+11. **Roda só em container.** `server.js` se recusa a subir sem `IN_CONTAINER` (ver
+    [`readme/14-docker.md`](readme/14-docker.md)). Não reintroduza caminho nativo: nada de
+    `start.sh`, nada de instrução `npm start` na doc. Para rodar, `./docker-app.sh`; para
+    desenvolver, `./docker-app.sh dev`. O `npm test` continua valendo fora do container
+    (os testes não sobem servidor), e `./docker-app.sh test` roda a mesma suíte dentro.
 
 ## Erros já cometidos (não repita)
 
@@ -97,6 +102,6 @@ readme/      documentação longa; comece por readme/README.md
 - Confirme que nenhum componente novo importa `api.js`.
 - Confirme `destroy()` em quem tem timer/listener e que o painel o chama.
 - Atualize o `readme/` correspondente.
-- Se dá para testar de verdade (reiniciar `npm start`, abrir a página), teste antes de
+- Se dá para testar de verdade (subir com `./docker-app.sh`, abrir a página), teste antes de
   dizer que está pronto. Painel e componente não têm teste automatizado — a verificação
   deles é no navegador.

@@ -28,6 +28,9 @@ services:
       # Libera os modos "automático" e "aceitar edições": o Claude edita arquivo e roda
       # comando direto, SEM perguntar. Ponha 0 para deixar o chat só-leitura.
       CHAT_ALLOW_FULL_TOOLS: "${CHAT_ALLOW_FULL_TOOLS:-1}"
+      # Onde o repositório está na máquina de fora: dentro é sempre /app, e o botão de
+      # ligar o servidor precisa do caminho de verdade para o comando fazer sentido.
+      HOST_PROJECT_DIR: "${PWD:-}"
 
     volumes:
       # MESMO caminho dentro e fora. Não troque por outro ponto de montagem: o transcrito
@@ -42,4 +45,6 @@ services:
     ports:
       - "127.0.0.1:${PORT:-7788}:7788"
 
-    restart: unless-stopped
+    # `on-failure`, não `unless-stopped`: o botão "Desligar" da interface sai com código 0
+    # e precisa FICAR desligado; "Reiniciar" sai com 1 e é o Docker que sobe de novo.
+    restart: on-failure

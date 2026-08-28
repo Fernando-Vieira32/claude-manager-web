@@ -45,8 +45,8 @@ URL="http://127.0.0.1:$PORT"
 
 rodando() { [ "$(docker inspect -f '{{.State.Running}}' claude-manager-web 2>/dev/null)" = true ]; }
 
-# Porta ocupada por OUTRO servidor (o ./start.sh nativo, por exemplo) daria um erro
-# cru do daemon no meio do `up`. Melhor dizer o que houve antes de tentar.
+# Porta ocupada por outro programa daria um erro cru do daemon no meio do `up`.
+# Melhor dizer o que houve antes de tentar.
 porta_livre() {
   rodando && return 0
   (exec 3<>/dev/tcp/127.0.0.1/"$PORT") 2>/dev/null || return 0

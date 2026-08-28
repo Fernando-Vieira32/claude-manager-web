@@ -9,12 +9,19 @@ Testes automatizados **sem dependência nenhuma**: o Node 18+ já traz o runner
 ## Rodar
 
 ```bash
-npm test              # todos, com saída legível (reporter "spec")
+./docker-app.sh test  # a suíte DENTRO do container (mesmo Node para todo mundo)
+
+npm test              # ou direto na máquina, se você tiver Node 18+
 npm run test:watch    # reroda ao salvar
 
 node --test "test/*.test.js"                      # equivalente ao npm test
 node --test --test-reporter=spec test/settings.test.js   # um arquivo só
 ```
+
+O app **só roda em container** ([14 · Docker](14-docker.md)), mas a suíte não: ela testa
+funções puras e nunca sobe o servidor, então roda dos dois lados. `./docker-app.sh test`
+existe para quem não quer instalar Node — e é o jeito de garantir que todos testam na
+mesma versão.
 
 Cada arquivo roda em um **processo próprio** (é assim que o `node --test` funciona),
 o que é essencial aqui — veja o sandbox abaixo.

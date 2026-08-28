@@ -130,7 +130,7 @@ preferências em `./data`. Desligar ou remover o container não perde nada.
 
 | Sintoma | Causa |
 | --- | --- |
-| `failed to bind host port 127.0.0.1:7788: address already in use` | já tem servidor nessa porta (o `./start.sh` nativo, por exemplo). Pare o outro ou mude `PORT` no `.env` |
+| `failed to bind host port 127.0.0.1:7788: address already in use` | outro programa já está nessa porta. Descubra com `ss -ltnp \| grep 7788` ou troque `PORT` no `.env` |
 | `defina HOST_HOME no .env` ao subir | `.env` antigo ou ausente — rode pelo `docker-app.sh`, que preenche |
 | chat responde `Not logged in · Please run /login` | esta máquina nunca usou o Claude Code: `./docker-app.sh login` |
 | build falha em `apt-get`/`npm install` com erro de conexão | a rede barra o Docker Hub ou o npm (comum em rede corporativa com proxy). Saída sem depender da rede: quem já construiu roda `docker save claude-manager-web \| gzip > app.tgz`; do outro lado, `docker load < app.tgz` e `docker compose up -d` |

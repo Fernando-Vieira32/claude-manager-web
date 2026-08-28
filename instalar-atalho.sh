@@ -13,8 +13,8 @@ escrever() {
 Type=Application
 Version=1.0
 Name=$NOME
-Comment=Sobe o painel do Claude Code e abre no navegador
-Exec=$DIR/start.sh
+Comment=Sobe o painel do Claude Code (em container) e abre no navegador
+Exec=$DIR/docker-app.sh
 Path=$DIR
 Icon=utilities-system-monitor
 Terminal=false
