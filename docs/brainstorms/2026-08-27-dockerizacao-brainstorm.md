@@ -24,8 +24,12 @@ Linux não executa `.exe` nem Mach-O). Com o alvo reduzido a Linux isso deixou d
 obrigatório — dava para usar o `claude` do host —, mas continua sendo a escolha: o colega
 não instala nada e todo mundo roda a mesma versão. Voltar atrás é uma linha de montagem.
 
-A consequência que se aceita: **o container é uma máquina própria**, com o Claude dele, o
-login dele e as conversas dele. O que a pessoa já fez no terminal de fora não aparece lá.
+**O container é o ambiente; a máquina continua sendo a do dono.** *(revisto em 27/08, depois
+de ver a tela)* A primeira versão dava ao container um `~/.claude` próprio — e o painel
+Conversas abriu vazio, o que contraria o critério de paridade. Agora o home entra montado no
+**mesmo caminho** dentro e fora: as conversas do terminal aparecem, o login já vale, e o
+`cwd` gravado nas transcrições existe lá dentro (é o que permite continuar uma conversa).
+Isso é exatamente o que torna o desenho **dependente de Linux**.
 
 **Clonar e construir** (em vez de publicar imagem) cai bem porque o público é
 programador e vai contribuir: quem já tem o repositório não ganha nada com um registro, e
@@ -39,12 +43,14 @@ nativo: o seletor de pastas mostrando a mesma árvore, `npm test` rodando quando
 
 | # | Decisão | Por quê | Consequência |
 | --- | --- | --- | --- |
-| 1 | CLI do Claude dentro da imagem | colega não instala nada; mesma versão para todos | container tem login e conversas próprios |
+| 1 | CLI do Claude dentro da imagem | colega não instala nada; mesma versão para todos | imagem maior (573 MB); nenhuma credencial dentro dela |
+| 1b | **Home do dono montado no mesmo caminho** (revisto) | paridade: conversas, login e `cwd` das transcrições só batem assim | amarra o desenho ao Linux |
 | 2 | Alvo Linux | simplifica: sem `.cmd`, sem CRLF, sem WSL2 | Windows/Mac só quando alguém precisar |
 | 3 | Entrega por clone + build local | público é dev; evita registro e multi-arch | build de alguns minutos na primeira vez |
 | 4 | `docker-compose.yml` + `docker-compose.dev.yml` | separa "usar" de "desenvolver" sem depender de editor | duas peças pequenas em vez de devcontainer |
 | 5 | Modo dev: código montado + `node --watch`, e `npm test` dentro **sob comando** | igual ao fluxo nativo de hoje (`npm run dev`, `npm test` quando você quer) | nada de teste automático atrasando o `up` |
-| 6 | **Home inteiro montado** | o seletor de pastas do app só lista o que existe dentro do container; montar o home devolve a árvore de hoje | `~/.ssh` e `~/.claude` ficam visíveis para o Claude de dentro — **aceito conscientemente**, é o que mantém `git push` funcionando |
+| 6 | **Home inteiro montado, no mesmo caminho** | dentro do container o app só vê o que foi montado; e o caminho tem de ser idêntico para `cwd` e `projects/` baterem | `~/.ssh` e `~/.claude` visíveis para o Claude de dentro — **aceito conscientemente**: é o que mantém `git push` e o login funcionando |
+| 10 | `pid: host`, mas AppArmor mantido | sem `pid: host` o painel Sessões fica vazio; abrir o AppArmor daria a última coluna e custaria o confinamento inteiro | Sessões lista e encerra; o `cwd` de cada sessão fica vazio (medido: `EACCES`) |
 | 7 | Nenhuma credencial no repositório nem na imagem | o repo é compartilhado | cada dev faz `login` uma vez dentro do container |
 | 8 | Porta publicada só em `127.0.0.1` | o painel não tem autenticação | ninguém na rede alcança — é app, não site |
 | 9 | Assumir internet livre no build | não dá para saber antes de tentar se a rede da empresa barra Docker Hub/npm | se falhar: documentado em Problemas, e a saída é passar a imagem por `docker save` |
@@ -66,7 +72,8 @@ corretos. `npm test` 172/172, sem mudar uma linha do app.
 | Apagar o `docker-app.cmd` e as menções a Windows/Mac | **feito** — `readme/14` reescrito para Linux, com a lista do que travaria fora |
 | Confirmar que o seletor de pastas mostra a árvore esperada | **feito** — 18 pastas dentro, 18 fora |
 | Parágrafo de "build falhou por rede" em Problemas | **feito** — com a saída por `docker save`/`docker load` |
-| `claude login` dentro do container, ponta a ponta | **em aberto** — fluxo de navegador, depende do dono; é o único passo que falta para dizer "funciona inteiro" |
+| `claude login` dentro do container, ponta a ponta | **resolvido pelo pivô** — o login é o do dono, então o chat completou um turno real (`ok:true`, 1,9 s) sem login novo |
+| Paridade medida | **feita** — conversas 52/52, sessões 3/3, `npm test` 172/172, turno de chat ok. Única diferença: `cwd` das sessões (AppArmor) |
 
 ## Perguntas resolvidas
 

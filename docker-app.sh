@@ -16,22 +16,28 @@ command -v docker >/dev/null || { echo 'erro: Docker não está instalado' >&2; 
 if docker compose version >/dev/null 2>&1; then DC=(docker compose); else DC=(docker-compose); fi
 DEV=("${DC[@]}" -f docker-compose.yml -f docker-compose.dev.yml)
 
-# O .env é desta máquina (uid, caminho do código) — por isso ele é gerado aqui e não
-# vem no repo, igual ao atalho .desktop.
+# O .env é desta máquina (uid, caminho do home) — por isso ele é gerado aqui e não vem
+# no repo, igual ao atalho .desktop.
 if [ ! -f .env ]; then
   cat > .env <<EOF
-# Pasta que o Claude enxerga dentro do container (vira ~/work). O home inteiro é o
-# padrão para o seletor de pastas do app mostrar a mesma árvore de fora — em troca,
-# o Claude de dentro também alcança ~/.ssh e ~/.claude. Estreite se preferir.
-WORK_DIR=$HOME
+# Seu home. Entra no container no MESMO caminho, e é o que faz o app ler o seu
+# ~/.claude de verdade: conversas do terminal aparecem e o login já vale.
+HOST_HOME=$HOME
 APP_UID=$(id -u)
 APP_GID=$(id -g)
 PORT=7788
 # 0 deixa o chat só-leitura (sem os modos automático/aceitar-edições).
 CHAT_ALLOW_FULL_TOOLS=1
 EOF
-  echo "criei o .env (pasta de trabalho: $HOME)"
+  echo "criei o .env (home: $HOME)"
 fi
+
+# .env de antes do home no mesmo caminho: completa em vez de quebrar com o erro do compose.
+grep -q '^HOST_HOME=' .env || { echo "HOST_HOME=$HOME" >> .env; echo 'acrescentei HOST_HOME ao .env'; }
+
+# Bind mount de pasta que não existe é criado pelo daemon como root — e aí o app não
+# escreve nas preferências. Melhor garantir que ela nasce sua.
+mkdir -p data
 
 set -a; . ./.env; set +a
 PORT="${PORT:-7788}"
@@ -62,10 +68,11 @@ esperar() {
   return 1
 }
 
-# Sem login o chat não roda — avisa em vez de deixar a pessoa descobrir no erro.
+# Sem login o chat não roda. Como o home é o seu, aqui normalmente já está tudo certo —
+# o aviso só aparece para quem nunca usou o Claude Code nesta máquina.
 avisar_login() {
-  "${DC[@]}" exec -T app test -f /home/claude/.claude/.credentials.json 2>/dev/null \
-    || echo 'atenção: o Claude ainda não tem login neste container — rode ./docker-app.sh login'
+  "${DC[@]}" exec -T app test -f "$HOST_HOME/.claude/.credentials.json" 2>/dev/null \
+    || echo 'atenção: não achei login do Claude neste home — rode ./docker-app.sh login'
 }
 
 # Janela de app (sem barra de endereço) quando houver navegador que suporte.

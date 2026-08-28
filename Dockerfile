@@ -19,12 +19,11 @@ RUN apt-get update \
  && npm install -g @anthropic-ai/claude-code \
  && npm cache clean --force
 
-# Home do Claude dentro do container: vira volume, então login e conversas
-# sobrevivem ao `docker rm`. Aberto para escrita porque no Linux o container roda
-# com o uid do dono (para os arquivos editados saírem dele, e não de root) — e esse
-# uid não existe no /etc/passwd da imagem.
+# Home de reserva, para `docker run` cru não ficar sem HOME (o uid não existe no
+# /etc/passwd da imagem). No uso normal o compose SUBSTITUI isto pelo home do dono,
+# montado no mesmo caminho — é de lá que vêm as conversas e o login.
 ENV HOME=/home/claude
-RUN mkdir -p /home/claude/work && chmod -R 0777 /home/claude
+RUN mkdir -p /home/claude && chmod -R 0777 /home/claude
 
 WORKDIR /app
 COPY . .

@@ -1,6 +1,10 @@
-# Suba com `./docker-app.sh` (Linux/Mac) ou `docker-app.cmd` (Windows): eles criam o
-# `.env` e abrem a janela. Com o `.env` pronto, `docker compose up -d` também serve.
-# Explicação de cada escolha em readme/14-docker.md.
+# Suba com `./docker-app.sh` (ele cria o `.env` e abre a janela). Com o `.env` pronto,
+# `docker compose up -d` também serve. Cada escolha está explicada em readme/14-docker.md.
+#
+# A ideia: o container é só o ambiente de execução; a MÁQUINA continua sendo a sua. O home
+# entra no MESMO caminho dentro e fora, então o `~/.claude` que o app lê é o seu — as
+# conversas do terminal aparecem, o login já vale, e o `cwd` gravado nos transcritos existe
+# de verdade lá dentro. Isso é o que exige Linux (ver o fim do readme/14).
 
 services:
   app:
@@ -8,22 +12,30 @@ services:
     image: claude-manager-web
     container_name: claude-manager-web
 
-    # No Linux, o uid do dono: o que o chat editar em `work/` sai como arquivo dele,
-    # não de root. No Windows/Mac o Docker Desktop já traduz dono, e isto é inofensivo.
+    # O uid do dono: o que o chat editar sai como arquivo dele, não de root — e, no mesmo
+    # caminho do home, é o que dá permissão de ler o próprio ~/.claude.
     user: "${APP_UID:-1000}:${APP_GID:-1000}"
 
+    # Sem isto o painel Sessões fica sempre vazio: ele lê `ps` e o container só vê os
+    # processos dele. Com o mesmo uid acima, encerrar sessão também volta a funcionar.
+    # Quem preferir o container mais fechado apaga esta linha e perde só esse painel.
+    pid: host
+
     environment:
+      # Sem isto o Node não descobre o home (o uid não existe no /etc/passwd da imagem) e
+      # cairia no /home/claude da imagem, que é justamente o que não queremos.
+      HOME: "${HOST_HOME:?defina HOST_HOME no .env: o seu home, ex. /home/fernando}"
       # Libera os modos "automático" e "aceitar edições": o Claude edita arquivo e roda
       # comando direto, SEM perguntar. Ponha 0 para deixar o chat só-leitura.
       CHAT_ALLOW_FULL_TOOLS: "${CHAT_ALLOW_FULL_TOOLS:-1}"
 
     volumes:
-      # Login e conversas. É o que faz o `claude login` valer para sempre.
-      - claude-home:/home/claude
-      # A sua pasta de código, do lado de fora. Sem ela o Claude não tem no que mexer.
-      - "${WORK_DIR:?defina WORK_DIR no .env: a pasta do seu código}:/home/claude/work"
-      # Preferências por conversa (cor, modo) e catálogo de modelos em cache.
-      - app-data:/app/data
+      # MESMO caminho dentro e fora. Não troque por outro ponto de montagem: o transcrito
+      # guarda o `cwd` absoluto e o nome da pasta em projects/ é derivado dele.
+      - "${HOST_HOME:?defina HOST_HOME no .env}:${HOST_HOME:?defina HOST_HOME no .env}"
+      # Preferências por conversa (cor/modo) e catálogo de modelos: a mesma pasta que o
+      # modo nativo usa, para os dois jeitos de rodar verem a mesma configuração.
+      - ./data:/app/data
 
     # App, não site: só quem está nesta máquina alcança a porta. Não troque por
     # "7788:7788" — o painel não tem autenticação (ver readme/07-seguranca.md).
@@ -31,7 +43,3 @@ services:
       - "127.0.0.1:${PORT:-7788}:7788"
 
     restart: unless-stopped
-
-volumes:
-  claude-home:
-  app-data:
