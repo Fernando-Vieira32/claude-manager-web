@@ -180,14 +180,21 @@ Não existe meio-termo aqui, e isso é decisão, não falta de vontade:
   conversa, então só ocupa espaço e ensina a ignorar avisos;
 - **um `claude` cru de terminal não declara id nenhum**, então para ele o aviso nunca
   sai. Quem quiser o aviso funcionando abre o terminal com `claude --resume <id>`;
-- execuções `headless` (`-p`) são ignoradas: são deste painel, e dois envios na mesma
-  conversa já batem no 409 do serviço de chat.
+- execuções `headless` (`-p`) são ignoradas: são deste painel.
 
 **A caixa não trava enquanto o Claude responde** — igual ao terminal. Mandou durante uma
-resposta? A mensagem aparece na hora com a etiqueta `na fila` e é enviada sozinha quando
-a atual terminar (o botão diz "Enfileirar" justamente para isso não ser surpresa). O que
-trava de verdade é o **compactar**, e aí o placeholder da caixa explica. Detalhe em
-[`chat`](11-componentes.md#chatjs).
+resposta? A mensagem **vai na hora** para o Claude; ele a atende quando termina o que
+estava fazendo. Enquanto espera, a bolha de resposta dela diz `na fila · aguardando a
+vez` — e não "pensando…", que seria inventar trabalho. O que trava de verdade é o
+**compactar**, e aí o placeholder da caixa explica. Detalhe em
+[`chat`](11-componentes.md#chatjs) e no desenho do serviço em [10](10-chat.md).
+
+**Quando o Claude retoma sozinho, você vê.** Ele solta agentes em segundo plano; quando
+um volta, o Claude responde **sem** você ter mandado nada. Isso aparece como uma bolha
+com o rótulo `retomou sozinho…` — antes esse trabalho não aparecia em lugar nenhum: a
+janela congelava na última resposta enquanto ele seguia trabalhando por dez minutos, e
+o botão "Parar" desaparecia, então nem interromper dava. A janela mantém um canal aberto
+com o servidor justamente para isso ([10](10-chat.md)).
 
 **Os dois caminhos abrem a MESMA janela.** Clicar em "Ler" na lista e iniciar uma
 conversa nova compõem o mesmo componente — e ele guarda quais estão abertas, então

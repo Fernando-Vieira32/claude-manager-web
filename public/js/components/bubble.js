@@ -3,31 +3,21 @@
 
 import { el, fmt } from '../core/ui.js';
 import { createActivity } from './activity.js';
-import { createToolCall } from './tool-call.js';
 
 const WHO = { user: 'você', assistant: 'claude', system: 'sistema' };
 
 /**
- * Bolha estática de uma mensagem já conhecida.
+ * Bolha estática de uma mensagem já conhecida — **só o texto** (e imagens).
  *
- * `tools` faz a mensagem lida do disco mostrar as ferramentas do mesmo jeito que
- * ao vivo — antes elas viravam um `⚙ nome` de texto e o detalhe se perdia quando
- * a resposta terminava e a conversa era relida.
+ * Ferramenta e agente NÃO entram aqui: cada um é um bloco próprio na conversa
+ * ([`message-items`](message-items.js)). Antes eles vinham empilhados no pé da bolha, o
+ * que embrulhava tudo numa caixa só, perdia a ordem em que as coisas aconteceram e
+ * enterrava um agente de doze minutos dentro de uma mensagem já terminada.
  *
  * @param {{role?:string, text?:string, at?:string, who?:string, badge?:string,
- *          images?:string[], tools?:Array<object>, onToggleTool?:Function}} msg
+ *          images?:string[]}} msg
  */
-export function messageBubble({ role = 'assistant', text = '', at, who, badge, images, tools, onToggleTool } = {}) {
-  // Sem destroy() aqui de propósito: o listener do tool-call está no próprio nó
-  // dele, então morre junto quando o feed remove a bolha. Só o que escuta
-  // document/window ou usa timer precisa de destroy explícito.
-  const calls = (tools || []).map((t) => {
-    const call = createToolCall({ ...t, onToggle: onToggleTool });
-    if (t.result) call.setResult(t.result);
-    else call.settle();          // já terminou: não fica "executando…" para sempre
-    return call.node;
-  });
-
+export function messageBubble({ role = 'assistant', text = '', at, who, badge, images } = {}) {
   return el('div', { class: `msg ${role}` },
     el('div', { class: 'who' },
       `${who || WHO[role] || role}${at ? ` · ${fmt.when(at)}` : ''}`,
@@ -35,18 +25,7 @@ export function messageBubble({ role = 'assistant', text = '', at, who, badge, i
     images && images.length
       ? el('div', { class: 'msg-imgs' }, ...images.map((src) => el('img', { class: 'msg-img', src, alt: 'imagem enviada' })))
       : null,
-    text ? el('pre', {}, text) : null,
-    calls.length ? el('div', { class: 'bubble-extras' }, ...calls) : null);
-}
-
-/**
- * Tira a etiqueta de uma bolha já montada — usado quando a mensagem sai da fila e
- * começa a ser enviada de verdade. Fica aqui porque a marcação da etiqueta é
- * conhecimento desta peça; quem chama não deve cutucar o DOM dela.
- */
-export function clearBadge(node) {
-  node?.querySelector('.bubble-badge')?.remove();
-  return node;
+    text ? el('pre', {}, text) : null);
 }
 
 /**
@@ -58,12 +37,12 @@ export function clearBadge(node) {
  * está acontecendo agora), o CHIP DE MODELO e, ao terminar, o RESUMO. Antes o
  * modelo substituía o indicador e dava a impressão de que nada estava rodando.
  */
-export function streamBubble({ role = 'assistant', who, label = 'pensando…' } = {}) {
+export function streamBubble({ role = 'assistant', who, label = 'pensando…', startedAt = null } = {}) {
   const pre = el('pre', {}, '');
-  const activity = createActivity({ label });
+  const activity = createActivity({ label, startedAt });
   const model = el('span', { class: 'chip accent', hidden: true });
   const summary = el('span', { class: 'chip ok', hidden: true });
-  const extras = el('div', { class: 'bubble-extras' });
+  const extras = el('div', { class: 'bubble-extras' });   // só avisos (chips) agora
   const node = el('div', { class: `msg ${role} streaming` },
     el('div', { class: 'who' }, who || WHO[role] || role, activity.node, model, summary),
     pre,
@@ -72,12 +51,17 @@ export function streamBubble({ role = 'assistant', who, label = 'pensando…' } 
   activity.start();
   let buffer = '';
   let done = false;
-  const tools = new Map();   // id do tool_use -> tool-call, para casar o resultado
-  const pendentes = [];      // todas as chamadas, para resolver e destruir no fim
+  let failed = false;
 
   const api = {
     node,
     text: () => buffer,
+    /**
+     * Terminou em erro? Quem manda a resposta precisa saber para NÃO recarregar o
+     * feed em cima da bolha — recarregar apaga a explicação do erro e sobra uma tela
+     * vazia sem nenhuma pista (foi bug de verdade).
+     */
+    get failed() { return failed; },
 
     append(chunk) {
       buffer += chunk;
@@ -97,33 +81,6 @@ export function streamBubble({ role = 'assistant', who, label = 'pensando…' } 
       return api;
     },
 
-    /**
-     * Registra uso de ferramenta. Compõe o `tool-call`, que é clicável e mostra o
-     * que foi pedido e o que voltou — inclusive de um subagente.
-     *
-     * `parentId` é o id da chamada que gerou esta (um subagente rodando Bash). Com
-     * ele a chamada entra DENTRO do chip do pai, só visível ao expandir — como no
-     * terminal. Sem isso o trabalho dos subagentes era despejado no mesmo nível da
-     * conversa, e não dava para saber quem fez o quê. Vale em qualquer
-     * profundidade: agente que chama agente aninha de novo, porque o filho também
-     * fica no mapa e passa a ser "pai" do neto.
-     */
-    addTool(name, { id, parentId, summary, input, inputTruncated, onToggle } = {}) {
-      const call = createToolCall({ name, summary, input, inputTruncated, onToggle });
-      if (id) tools.set(id, call);
-      pendentes.push(call);
-      const pai = parentId ? tools.get(parentId) : null;
-      if (pai) pai.addChild(call.node);
-      else extras.append(call.node);   // pai desconhecido: melhor mostrar solto que sumir
-      return api;
-    },
-
-    /** Casa o resultado com a chamada pelo id do `tool_use`. */
-    setToolResult(id, payload) {
-      tools.get(id)?.setResult(payload);
-      return api;
-    },
-
     addNotice(message) {
       extras.append(el('span', { class: 'chip warn' }, message));
       return api;
@@ -139,9 +96,9 @@ export function streamBubble({ role = 'assistant', who, label = 'pensando…' } 
 
     setError(message) {
       done = true;
+      failed = true;
       node.classList.remove('streaming');
       node.classList.add('error');
-      pendentes.forEach((c) => c.settle());
       activity.stop();
       activity.node.hidden = true;
       summary.className = 'chip warn';
@@ -156,8 +113,6 @@ export function streamBubble({ role = 'assistant', who, label = 'pensando…' } 
       if (done) return api;
       done = true;
       node.classList.remove('streaming');
-      // ferramenta sem resultado no stream não fica "executando…" para sempre
-      pendentes.forEach((c) => c.settle());
       activity.stop();
       activity.node.hidden = true;
       if (text) {
@@ -170,9 +125,11 @@ export function streamBubble({ role = 'assistant', who, label = 'pensando…' } 
 
     /** Obrigatório: a bolha pode sumir com o stream ainda vivo (drawer fechado). */
     destroy() {
-      pendentes.forEach((c) => c.destroy());
       activity.destroy();
     },
+
+    /** Tem algo escrito? Bolha viva que ficou vazia sai do feed em vez de virar "(sem texto)". */
+    get empty() { return !buffer.trim() && !extras.childNodes.length; },
   };
 
   return api;

@@ -71,11 +71,26 @@ Os erros comuns (porta ocupada, build barrado pela rede, falta de login) estão 
 
 ## 5. O que é normal numa máquina nova
 
-- **`data/` vazio** (ou ausente): as preferências por conversa (cor/modo) são amarradas ao
-  id da conversa da máquina de origem, então não se aplicam aqui. A pasta é recriada
-  sozinha — ver [03 · API](03-api.md#configurações-settings).
+- **`data/` vazio** (ou ausente): é onde ficam as preferências (cor/modo por conversa,
+  retenção da lixeira, catálogo de modelos em cache), e elas são amarradas ao id da conversa
+  da máquina de origem — então não se aplicam aqui. A pasta é recriada sozinha; ver
+  [03 · API](03-api.md#configurações-settings). Ela é montada de fora (`./data`), então
+  sobrevive a `docker rm`. Redirecionável com `DATA_DIR` — é o que os testes usam para não
+  encostar na sua.
 - **Lista de conversas/sessões diferente:** ela reflete o Claude Code **desta** máquina,
   não o da origem. Isso é o esperado.
+- **O medidor de contexto pode começar como "palpite".** A janela real do modelo vem do
+  catálogo da API, buscado com a credencial do próprio CLI e guardado em `data/models.json`
+  (ou com `ANTHROPIC_API_KEY`, se você preferir) — ver
+  [03 · API](03-api.md#modelos-models). Até a primeira busca dar certo, o número aparece
+  **marcado como palpite** em vez de se passar por fato.
+- **Conversa criada pelo navegador aparece no `/resume` do terminal.** Isso depende de uma
+  marca que o servidor põe no processo filho (`CHAT_ENTRYPOINT`) — e vale também de dentro
+  do container, porque o `~/.claude` é o mesmo. O porquê está em
+  [10 · Chat](10-chat.md#aparecer-no-resume-do-terminal).
+- **Agente de segundo plano só aparece com o que está escrito no arquivo.** O terminal
+  desenha da memória dele; aqui a fonte é o `.jsonl`, então a janela acompanha a cadência
+  com que o CLI escreve — ver [10 · Chat](10-chat.md#agentes-em-segundo-plano).
 - **Sessões sem o projeto em cada linha:** o perfil AppArmor do Docker impede ler o `cwd`
   de processo de fora. Encerrar sessão continua funcionando — ver
   [14 · Docker](14-docker.md#a-única-diferença-que-sobrou).

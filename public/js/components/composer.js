@@ -78,13 +78,12 @@ export function createComposer({
 
   const values = () => Object.fromEntries([...controls].map(([k, c]) => [k, c.value()]));
 
-  let busy = false;
   let locked = false;
 
   async function fire() {
     const text = input.value.trim();
     const images = tray ? tray.items() : [];
-    // `busy` não impede: enviar durante uma resposta é permitido (vira fila).
+    // "respondendo" não impede: a mensagem escrita durante uma resposta sai na hora.
     // `locked` impede: é outra operação mexendo na conversa (ex.: /compact).
     if (locked || (!text && !images.length)) return;
     input.value = '';
@@ -111,16 +110,14 @@ export function createComposer({
     node: form,
     values,
 
-    /** Trava a caixa enquanto uma resposta está em andamento. */
     /**
-     * Marca "respondendo". **Não trava a caixa**: no terminal você digita durante a
-     * resposta e a mensagem espera a vez, e aqui é igual — quem serializa é o
-     * `chat`, que enfileira. Antes isto fazia `input.disabled = true` e você ficava
-     * de mãos atadas até a resposta acabar.
+     * Marca "respondendo": só revela o botão de interromper. **Não trava a caixa** e
+     * **não troca o rótulo do botão** — a mensagem que você escreve durante uma
+     * resposta sai na hora para quem responde, então chamar isso de "Enfileirar"
+     * mentiria: não é esta caixa que segura nada. Antes isto fazia
+     * `input.disabled = true` e você ficava de mãos atadas até a resposta acabar.
      */
     setBusy(value) {
-      busy = value;
-      submit.textContent = value ? 'Enfileirar' : label;
       if (onStop) stop.hidden = !value;
       return api;
     },
@@ -142,7 +139,7 @@ export function createComposer({
     /** Troca o rótulo do botão (ex.: "Iniciar conversa" → "Enviar" após criar). */
     setSubmitLabel(text) {
       label = text;
-      if (!busy) submit.textContent = text;
+      submit.textContent = text;
       return api;
     },
 

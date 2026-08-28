@@ -27,7 +27,7 @@ function elapsed(ms) {
  * @param {string} [opts.label='trabalhando…'] texto inicial
  * @param {boolean} [opts.bar=false] mostra a barra indeterminada (para rodapés)
  */
-export function createActivity({ label = 'trabalhando…', bar = false } = {}) {
+export function createActivity({ label = 'trabalhando…', bar = false, startedAt: desde = null } = {}) {
   const dot = el('span', { class: 'activity-dot' });
   const labelNode = el('span', { class: 'activity-label' }, label);
   const timeNode = el('span', { class: 'activity-time' }, '');
@@ -38,18 +38,24 @@ export function createActivity({ label = 'trabalhando…', bar = false } = {}) {
     dot, labelNode, timeNode, barNode);
 
   let timer = null;
-  let startedAt = 0;
+  let inicio = desde || 0;
 
-  const tick = () => { timeNode.textContent = elapsed(Date.now() - startedAt); };
+  const tick = () => { timeNode.textContent = elapsed(Date.now() - inicio); };
 
   const api = {
     node,
 
-    /** (Re)inicia o relógio e a animação. `text` opcional troca o rótulo. */
-    start(text) {
+    /**
+     * (Re)inicia o relógio e a animação. `text` opcional troca o rótulo.
+     *
+     * `opts.startedAt` (ou o do construtor) faz o relógio contar de um começo que NÃO é
+     * agora — é como um indicador novo mostra o tempo do TURNO, e não o seu próprio: o
+     * turno continua o mesmo quando a bolha viva é trocada por causa de um bloco novo.
+     */
+    start(text, { startedAt = inicio || desde } = {}) {
       if (text) labelNode.textContent = text;
       node.classList.remove('done');
-      startedAt = Date.now();
+      inicio = startedAt || Date.now();
       tick();
       if (!timer) timer = setInterval(tick, 1000);
       return api;

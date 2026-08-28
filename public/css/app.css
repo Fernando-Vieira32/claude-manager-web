@@ -381,6 +381,59 @@ table.grid tr.accent td:first-child { box-shadow: inset 3px 0 0 var(--row-accent
 .bubble-extras { display: flex; flex-wrap: wrap; gap: 6px; }
 .bubble-extras:empty { display: none; }
 
+/* ------------------------------- blocos soltos do feed (ferramenta, agente) */
+/* Ferramenta e agente NÃO moram dentro da bolha: cada um é um bloco na sequência,
+   como no terminal. Recuados e sem fundo de caixa, para a leitura seguir sendo a
+   prosa do main — o que está em caixa é o que foi dito. */
+.feed-block { margin-left: 14px; }
+.feed-block.feed-tool { padding: 2px 0; }
+
+/* ---------------------------------------- componente agent-card (agente) */
+.agent-card {
+  display: grid; gap: 6px; padding: 8px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--line);
+  border-left: 3px solid color-mix(in srgb, var(--accent) 55%, var(--line));
+  background: color-mix(in srgb, var(--surface) 70%, transparent);
+}
+.agent-card.running { border-left-color: var(--accent); }
+.agent-card.failed { border-left-color: var(--danger); }
+.agent-head {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  border: 0; background: none; color: var(--text);
+  padding: 0; cursor: pointer; text-align: left; font: inherit;
+}
+.agent-name { font-family: var(--mono); font-size: 12.5px; }
+.agent-caret { color: var(--text-faint); }
+.agent-type, .agent-model { background: var(--surface-2); color: var(--text-dim); }
+.agent-detail { display: grid; gap: 8px; min-width: 0; }
+.agent-kids { display: grid; gap: 6px; }
+
+/* ------------------------------------- componente agent-strip (rodapé) */
+/* Fica acima da caixa de escrever: um agente que roda dez minutos não pode obrigar
+   a rolar o feed para você saber se ele ainda está de pé. */
+.agents-strip {
+  display: grid; gap: 4px; padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px dashed color-mix(in srgb, var(--accent) 40%, var(--line));
+  background: color-mix(in srgb, var(--accent-soft) 60%, transparent);
+}
+.agents-title {
+  font-size: 10.5px; letter-spacing: .5px; text-transform: uppercase;
+  color: var(--text-dim);
+}
+.agents-list { display: grid; gap: 2px; }
+.agents-row {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  border: 0; background: none; color: var(--text);
+  padding: 2px 0; cursor: pointer; text-align: left; font: inherit;
+}
+.agents-row:hover .agents-name { color: var(--accent); }
+.agents-name {
+  font-family: var(--mono); font-size: 12px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 42ch;
+}
+
 /* ------------------------------------- componente tool-call (ferramenta) */
 /* Fechado é só um chip na linha das etiquetas; aberto ocupa a linha inteira,
    senão o detalhe ficaria comprimido ao lado dos outros chips. */

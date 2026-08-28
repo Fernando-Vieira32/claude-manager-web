@@ -1,129 +1,132 @@
 // Continuar uma conversa do Claude Code pelo navegador.
 //
-// Usa o próprio CLI em modo headless:
-//   claude -p "<texto>" --resume <sessionId> --output-format stream-json --verbose
-// Com --resume o session_id é preservado e as mensagens são gravadas no MESMO
-// .jsonl — então o leitor do painel (e o terminal, se você reabrir por lá) vê a
-// continuação. Nada de banco de dados nem de histórico paralelo.
+// Uma conversa = UM processo `claude` vivo (`runner.js`), alimentado por stdin em
+// `--input-format stream-json`. Mandar mensagem enquanto o Claude responde é
+// permitido: a linha vai para o stdin na hora e o próprio CLI enfileira o turno —
+// a espera é dentro do Claude, como no terminal, e não numa fila do navegador.
+//
+// Com `--resume`/`--session-id` o session_id é preservado e as mensagens são
+// gravadas no MESMO .jsonl — então o leitor do painel (e o terminal, se você
+// reabrir por lá) vê a continuação. Nada de banco nem de histórico paralelo.
+//
+// Aqui mora só a cola: validação, resolução da conversa e o mapa de runners.
 
-import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import fs from 'node:fs/promises';
-import { existsSync } from 'node:fs';
-import os from 'node:os';
-import path from 'node:path';
 import { resolveConversationId, cwdOfConversation, encodeProject } from '../../core/claude-paths.js';
-import { badRequest, notFound, conflict } from '../../core/http.js';
-import { forward } from './stream.js';
+import { notFound, conflict } from '../../core/http.js';
+import { MODE_POLICIES, modeArgs, runnerArgs, oneshotArgs } from './args.js';
+import { createRunner } from './runner.js';
+import { runOnce } from './oneshot.js';
+import { validMessage, validImages, validDir } from './validate.js';
+import { createRunnerRegistry } from './runners.js';
+import { followTranscript } from './follow.js';
 
-const WRITE_TOOLS = ['Bash', 'Write', 'Edit', 'MultiEdit', 'NotebookEdit', 'Task'];
-const NET_TOOLS = ['WebFetch', 'WebSearch'];
-const READ_TOOLS = ['Read', 'Glob', 'Grep'];
-
-/** Modos que editam/executam exigem opt-in explícito no servidor (sem prompt no navegador). */
-function requireFullTools() {
-  if (process.env.CHAT_ALLOW_FULL_TOOLS !== '1') {
-    throw badRequest(
-      'este modo edita/executa e está desligado; suba o servidor com CHAT_ALLOW_FULL_TOOLS=1 para habilitar',
-    );
-  }
-}
+/** conversationId -> runner (processo vivo, pode estar ocioso); regras em runners.js */
+const runners = createRunnerRegistry();
+/** conversationId -> { child, startedAt } — só o /compact, que é execução única */
+const oneshots = new Map();
 
 /**
- * Modos de permissão oferecidos ao navegador — espelham os do terminal
- * (`claude --permission-mode`). Em headless não existe "perguntar antes": o modo
- * já libera ou não.
- *  none         — só conversa; não lê, não edita, não roda nada.
- *  plan         — modo plano: lê o projeto e propõe um plano, sem alterar nada.
- *  auto         — o Claude decide o que é seguro e edita/roda direto (gated).
- *  acceptEdits  — aplica edições e roda comandos sem perguntar (gated).
- * "gated" = só funciona com CHAT_ALLOW_FULL_TOOLS=1 no ambiente do servidor.
+ * "Está trabalhando AGORA" — o `working` do runner, não o `busy`: o CLI começa turnos
+ * sozinho, e nesses ele trabalha com a fila vazia. Dizer `false` ali escondia o "Parar"
+ * no exato momento em que ele era necessário.
  */
-const MODE_POLICIES = {
-  none: () => ['--disallowedTools', ...WRITE_TOOLS, ...NET_TOOLS, ...READ_TOOLS],
-  plan: () => ['--permission-mode', 'plan'],
-  auto: () => { requireFullTools(); return ['--permission-mode', 'auto']; },
-  acceptEdits: () => { requireFullTools(); return ['--permission-mode', 'acceptEdits']; },
-};
-
-/**
- * Caminho do binário `claude`, resolvido uma vez no boot para não depender do PATH
- * de quem subiu o servidor. Se ele for iniciado por um atalho/serviço com PATH
- * mínimo (sem `~/.npm-global/bin`), um `spawn('claude')` cru daria `ENOENT` e todo
- * o chat/compact quebraria. Ordem: `CLAUDE_BIN` explícito → PATH → locais de
- * instalação conhecidos → o nome cru (deixa o SO falhar com erro claro).
- */
-function resolveClaudeBin() {
-  if (process.env.CLAUDE_BIN && existsSync(process.env.CLAUDE_BIN)) return process.env.CLAUDE_BIN;
-  const home = os.homedir();
-  const candidates = [
-    ...(process.env.PATH || '').split(path.delimiter).map((d) => d && path.join(d, 'claude')),
-    path.join(home, '.npm-global/bin/claude'),
-    path.join(home, '.local/bin/claude'),
-    path.join(home, '.claude/local/claude'),
-    '/usr/local/bin/claude',
-  ];
-  return candidates.find((c) => c && existsSync(c)) || 'claude';
-}
-
-const CLAUDE_BIN = resolveClaudeBin();
-
-const MAX_TEXT = 100_000;
-const RUN_TIMEOUT_MS = Number(process.env.CHAT_TIMEOUT_MS || 15 * 60 * 1000);
-// Sem teto de gasto por padrão — igual ao terminal. Numa assinatura (plano) você
-// não paga por token, então limitar dólares só atrapalha. Quem usa API pode pôr
-// um teto opcional com CHAT_MAX_USD (aí a flag --max-budget-usd é passada).
-const MAX_USD = process.env.CHAT_MAX_USD || '';
-
-const IMG_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'];
-const MAX_IMAGES = 6;
-const MAX_IMG_BYTES = 8 * 1024 * 1024; // por imagem, já em base64 decodificado (~aprox)
-
-/** Uma execução por conversa: id -> { child, startedAt } */
-const running = new Map();
-
 export function isRunning(id) {
-  return running.has(id);
+  return Boolean(runners.get(id)?.working) || oneshots.has(id);
 }
 
 export function listRunning() {
-  return [...running.entries()].map(([id, run]) => ({
+  const fromRunners = runners.list().map((r) => ({
+    id: r.conversationId,
+    pid: r.pid,
+    startedAt: new Date(r.startedAt).toISOString(),
+    kind: 'chat',
+    busy: r.busy,
+    working: r.working,
+    auto: r.auto,
+    pending: r.pending,
+    lastOutputAt: new Date(r.lastOutputAt).toISOString(),
+  }));
+  const fromOneshots = [...oneshots.entries()].map(([id, run]) => ({
     id,
     pid: run.child.pid,
     startedAt: new Date(run.startedAt).toISOString(),
+    kind: 'compact',
+    busy: true,
+    working: true,
+    auto: false,
+    pending: 1,
+    lastOutputAt: null,
   }));
+  return [...fromRunners, ...fromOneshots];
 }
 
+/** O `hello` do canal: o que o navegador precisa saber ao (re)conectar. */
+export function chatState(id) {
+  const once = oneshots.get(id);
+  if (once) return { pid: once.child.pid, busy: true, pending: 1 };
+  const runner = runners.get(id);
+  if (!runner?.alive) return { pid: null, busy: false, pending: 0 };
+  return { pid: runner.pid, busy: runner.busy, pending: runner.pending };
+}
+
+/**
+ * Acompanha o arquivo desta conversa enquanto alguém ouve o canal — é assim que o que
+ * você faz NO TERMINAL aparece na janela do navegador sem fechar e abrir.
+ *
+ * Pausa enquanto o processo é NOSSO: aí a resposta já sai pelo SSE do próprio turno, e
+ * publicar o arquivo também mostraria tudo em dobro.
+ *
+ * @returns {() => void} para de acompanhar (a rota chama ao fechar o canal).
+ */
+export function watchTranscript(id) {
+  const { file } = resolveConversationId(id);
+  return followTranscript(id, {
+    file,
+    paused: () => Boolean(runners.get(id)?.alive || oneshots.has(id)),
+  });
+}
+
+/**
+ * Para a resposta em andamento. No chat isso é um `interrupt` no processo vivo (não
+ * SIGTERM): o turno em voo é cortado, mas o processo, a sessão quente e as mensagens
+ * já enfileiradas continuam valendo. O `/compact`, sendo execução única, só morre.
+ *
+ * A porta é o `working`, o mesmo critério do `/status`: se o painel mostra o "Parar",
+ * clicar nele não pode dar 404. Sem nada para cortar, a resposta é `stopped: false` —
+ * que é a verdade, não um erro.
+ */
 export function stopRun(id) {
-  const run = running.get(id);
-  if (!run) throw notFound('não há execução em andamento para esta conversa');
-  run.child.kill('SIGTERM');
-  return { id, stopped: true, pid: run.child.pid };
+  const runner = runners.get(id);
+  if (runner?.working) return { id, stopped: runner.interrupt(), pid: runner.pid, pending: runner.pending };
+  const once = oneshots.get(id);
+  if (once) {
+    once.child.kill('SIGTERM');
+    return { id, stopped: true, pid: once.child.pid };
+  }
+  throw notFound('não há execução em andamento para esta conversa');
 }
 
 /**
  * Envia uma mensagem e transmite a resposta via SSE.
- * Eventos: init, system, delta, message, tool, notice, result, error, done.
+ * Eventos: init, queued, turnStart, system, delta, message, tool, notice, result,
+ * error, done.
  */
-export async function sendMessage({ id, text, mode = 'none', model, images }, sse, req) {
+export async function sendMessage({ id, text, mode = 'none', model, images }, sse) {
   const imgs = validImages(images);
   const message = validMessage(text, imgs.length);
   const extraArgs = modeArgs(mode);
-  const { sessionId, cwd } = await resolveExisting(id);
-  return runClaude({ conversationId: id, sessionId, cwd, prompt: message, extraArgs, model, mode, images: imgs }, sse, req);
-}
 
-/**
- * Compacta a conversa — equivale ao /compact do terminal: resume o histórico e
- * grava um marcador no mesmo transcript, reduzindo o contexto. Sem ferramentas.
- */
-export async function compactConversation({ id, model }, sse, req) {
+  // Processo vivo? Então já sabemos sessão e pasta, e reler o transcript seria pior
+  // que inútil: numa conversa RECÉM-CRIADA o .jsonl ainda não existe, e era aí que a
+  // segunda mensagem morria com "conversa não encontrada". Só quem precisa spawnar
+  // vai ao disco.
+  const vivo = runners.reusable(id, `${mode}|${model || ''}`);
+  if (vivo) return vivo.send({ text: message, images: imgs, sse, kind: 'message' });
+
   const { sessionId, cwd } = await resolveExisting(id);
-  return runClaude(
-    { conversationId: id, sessionId, cwd, prompt: '/compact', extraArgs: MODE_POLICIES.none(), model, mode: 'none', kind: 'compact' },
-    sse,
-    req,
-  );
+  const runner = await runnerFor({ conversationId: id, sessionId, cwd, extraArgs, mode, model });
+  return runner.send({ text: message, images: imgs, sse, kind: 'message' });
 }
 
 /**
@@ -131,54 +134,80 @@ export async function compactConversation({ id, model }, sse, req) {
  * passamos ao CLI com --session-id, então já sabemos o id da conversa antes mesmo
  * de o Claude responder — sem --resume, um .jsonl novo nasce em ~/.claude/projects.
  */
-export async function startConversation({ cwd, text, mode = 'none', model, images }, sse, req) {
+export async function startConversation({ cwd, text, mode = 'none', model, images }, sse) {
   const imgs = validImages(images);
   const message = validMessage(text, imgs.length);
   const extraArgs = modeArgs(mode);
-
-  const dir = String(cwd || '').trim();
-  if (!path.isAbsolute(dir)) throw badRequest('a pasta precisa ser um caminho absoluto');
-  let stat;
-  try { stat = await fs.stat(dir); } catch { throw badRequest(`a pasta não existe: ${dir}`); }
-  if (!stat.isDirectory()) throw badRequest(`não é uma pasta: ${dir}`);
+  const dir = await validDir(cwd);
 
   const sessionId = randomUUID();
   const conversationId = `${encodeProject(dir)}:${sessionId}`;
-  return runClaude(
-    { conversationId, sessionId, cwd: dir, prompt: message, extraArgs, model, mode, images: imgs, kind: 'new', isNew: true },
-    sse,
-    req,
-  );
+  const runner = await runnerFor({ conversationId, sessionId, cwd: dir, extraArgs, mode, model, isNew: true });
+  return runner.send({ text: message, images: imgs, sse, kind: 'new' });
 }
 
-/* -------------------------------------------------------------- validações */
-
-function validMessage(text, imageCount = 0) {
-  const message = String(text || '').trim();
-  if (!message && !imageCount) throw badRequest('mensagem vazia');
-  if (message.length > MAX_TEXT) throw badRequest('mensagem muito longa');
-  return message;
+/**
+ * Compacta a conversa — equivale ao /compact do terminal: resume o histórico e
+ * grava um marcador no mesmo transcript, reduzindo o contexto. Sem ferramentas.
+ * É execução única de propósito: dois processos reescrevendo o mesmo transcript se
+ * atropelariam, então o runner da conversa é fechado antes.
+ */
+export async function compactConversation({ id, model }, sse) {
+  const { sessionId, cwd } = await resolveExisting(id);
+  if (oneshots.has(id)) throw conflict('esta conversa já está compactando');
+  await freeConversation(id, 'compactar');
+  const args = oneshotArgs({ prompt: '/compact', sessionId, extraArgs: MODE_POLICIES.none(), model });
+  const { child, done } = runOnce({ conversationId: id, sessionId, cwd, mode: 'none', kind: 'compact', args }, sse);
+  oneshots.set(id, { child, startedAt: Date.now() });
+  try {
+    await done;
+  } finally {
+    oneshots.delete(id);
+  }
 }
 
-/** Valida e normaliza as imagens: [{ media_type, data(base64) }]. */
-function validImages(images) {
-  if (images == null) return [];
-  if (!Array.isArray(images)) throw badRequest('imagens em formato inválido');
-  if (images.length > MAX_IMAGES) throw badRequest(`no máximo ${MAX_IMAGES} imagens por mensagem`);
-  return images.map((img, i) => {
-    const type = String(img?.media_type || '');
-    const data = String(img?.data || '');
-    if (!IMG_TYPES.includes(type)) throw badRequest(`imagem ${i + 1}: tipo não suportado (${type || 'vazio'})`);
-    if (!data) throw badRequest(`imagem ${i + 1}: sem dados`);
-    if (data.length * 0.75 > MAX_IMG_BYTES) throw badRequest(`imagem ${i + 1}: muito grande`);
-    return { media_type: type, data };
+/* ------------------------------------------------------------- runners */
+
+/**
+ * O runner de uma conversa, criando-o se preciso. Modo e modelo viram a
+ * "assinatura" do processo: eles são flags de linha de comando, então trocar de
+ * modo exige processo novo. Enquanto a assinatura é a mesma, mensagem nova só
+ * entra na fila — este é o caminho normal e não pode dar 409.
+ */
+async function runnerFor({ conversationId, sessionId, cwd, extraArgs, mode, model, isNew = false }) {
+  const signature = `${mode}|${model || ''}`;
+  const reusable = runners.reusable(conversationId, signature);
+  if (reusable) return reusable;
+
+  const existing = runners.get(conversationId);
+  if (existing?.alive) {
+    // ocioso com outra assinatura: sai do mapa ANTES de fechar, porque um envio que
+    // chegue durante o fechamento não pode pegar um processo com o stdin a caminho
+    // do fim — a mensagem sumiria
+    runners.forget(conversationId, existing);
+    await existing.close();
+  }
+  if (oneshots.has(conversationId)) throw conflict('esta conversa está compactando; espere terminar');
+
+  const runner = createRunner({
+    conversationId,
+    sessionId,
+    cwd,
+    mode,
+    signature,
+    args: runnerArgs({ sessionId, isNew, extraArgs, model }),
+    onExit: () => runners.forget(conversationId, runner),
   });
+  runners.remember(conversationId, runner);
+  return runner;
 }
 
-function modeArgs(mode) {
-  const policy = MODE_POLICIES[mode];
-  if (!policy) throw badRequest(`modo de permissão inválido: ${mode}`);
-  return policy();
+/** Libera a conversa para uma execução única: recusa se está respondendo, fecha se ociosa. */
+async function freeConversation(id, acao) {
+  const runner = runners.get(id);
+  if (!runner?.alive) return;
+  if (runner.busy) throw conflict(`esta conversa está respondendo; espere terminar para ${acao}`);
+  await runner.close();
 }
 
 /** Resolve uma conversa existente no par (sessionId, cwd). */
@@ -188,100 +217,3 @@ async function resolveExisting(id) {
   if (!cwd) throw notFound('conversa não encontrada (ou sem cwd no transcript)');
   return { sessionId, cwd };
 }
-
-/**
- * Núcleo compartilhado: dispara o CLI headless e transmite o stream em SSE.
- * `isNew` decide entre `--session-id` (nascer) e `--resume` (continuar) — o resto
- * do caminho (spawn, timeout, órfãos, tradução do stream) é idêntico.
- */
-async function runClaude({ conversationId, sessionId, cwd, prompt, extraArgs, model, mode, images = [], kind = 'message', isNew = false }, sse, req) {
-  if (running.has(conversationId)) throw conflict('já existe uma execução em andamento nesta conversa');
-
-  const hasImages = images.length > 0;
-
-  // Sem imagem: prompt vai como -p "texto" (simples, comprovado). Com imagem: o
-  // texto não cabe num argumento junto do binário base64, então mandamos a
-  // mensagem inteira (texto + blocos de imagem) pelo stdin em stream-json.
-  const args = [
-    '-p',
-    ...(hasImages ? ['--input-format', 'stream-json'] : [prompt]),
-    isNew ? '--session-id' : '--resume', sessionId,
-    '--output-format', 'stream-json',
-    '--verbose',
-    '--include-partial-messages',
-    ...extraArgs,
-  ];
-  if (model) args.push('--model', model);
-  if (MAX_USD) args.push('--max-budget-usd', MAX_USD); // só se você definir um teto
-
-  // Garante que o diretório do binário esteja no PATH do filho (o CLI e o que ele
-  // mesmo dispara também procuram no PATH).
-  const binDir = path.isAbsolute(CLAUDE_BIN) ? path.dirname(CLAUDE_BIN) : null;
-  const env = binDir
-    ? { ...process.env, PATH: `${binDir}${path.delimiter}${process.env.PATH || ''}` }
-    : process.env;
-
-  const child = spawn(CLAUDE_BIN, args, {
-    cwd,
-    stdio: [hasImages ? 'pipe' : 'ignore', 'pipe', 'pipe'],
-    env,
-  });
-
-  if (hasImages) {
-    const content = [];
-    if (prompt) content.push({ type: 'text', text: prompt });
-    for (const img of images) {
-      content.push({ type: 'image', source: { type: 'base64', media_type: img.media_type, data: img.data } });
-    }
-    child.stdin.write(`${JSON.stringify({ type: 'user', message: { role: 'user', content } })}\n`);
-    child.stdin.end();
-  }
-
-  running.set(conversationId, { child, startedAt: Date.now() });
-
-  sse.send({ type: 'init', conversationId, sessionId, cwd, mode, kind, images: images.length, pid: child.pid });
-
-  const timer = setTimeout(() => {
-    sse.send({ type: 'error', message: 'tempo limite excedido; execução encerrada' });
-    child.kill('SIGTERM');
-  }, RUN_TIMEOUT_MS);
-
-  // se o navegador fechar a aba, não deixe processo órfão rodando
-  const onClientGone = () => child.kill('SIGTERM');
-  req.on('close', onClientGone);
-
-  let buffer = '';
-  child.stdout.setEncoding('utf8');
-  child.stdout.on('data', (chunk) => {
-    buffer += chunk;
-    const lines = buffer.split('\n');
-    buffer = lines.pop() || '';
-    for (const line of lines) forward(line, sse);
-  });
-
-  child.stderr.setEncoding('utf8');
-  child.stderr.on('data', (chunk) => {
-    const t = String(chunk).trim();
-    if (t) sse.send({ type: 'notice', message: t.slice(0, 500) });
-  });
-
-  return new Promise((resolve) => {
-    child.on('error', (err) => {
-      const message = err.code === 'ENOENT'
-        ? `não encontrei o binário "claude" (${CLAUDE_BIN}). Instale o Claude Code ou `
-          + 'aponte a variável CLAUDE_BIN para o executável ao subir o servidor.'
-        : `falha ao executar o claude: ${err.message}`;
-      sse.send({ type: 'error', message });
-    });
-    child.on('close', (code, signal) => {
-      if (buffer.trim()) forward(buffer, sse);
-      clearTimeout(timer);
-      req.off('close', onClientGone);
-      running.delete(conversationId);
-      sse.send({ type: 'done', code, signal: signal || null });
-      sse.close();
-      resolve();
-    });
-  });
-}
-

@@ -31,6 +31,8 @@ const DEFAULT_LABELS = {
  * @param {number} [opts.pageSize=20]
  * @param {number} [opts.triggerPx=150] distância do topo que dispara a próxima página
  * @param {(state:{shown:number,total:number,hasMore:boolean}) => void} [opts.onState]
+ * @param {(page:object) => void} [opts.onPage] a página INTEIRA como veio do transporte —
+ *   para quem precisa do que não é item (ex.: quais agentes estão de pé na conversa)
  * @param {object} [opts.labels]
  */
 export function createFeed({
@@ -39,6 +41,7 @@ export function createFeed({
   pageSize = 20,
   triggerPx = 150,
   onState,
+  onPage,
   labels = {},
 }) {
   const text = { ...DEFAULT_LABELS, ...labels };
@@ -93,7 +96,9 @@ export function createFeed({
       hasMore = Boolean(page.hasMore);
       oldest = page.from ?? 0;
 
-      const nodes = items.map(renderItem);
+      // um item pode render MAIS de um nó (uma mensagem virou prosa + ferramentas +
+      // agentes, cada um seu bloco), então aqui se achata: o feed conta ITENS, não nós
+      const nodes = items.map(renderItem).flat().filter(Boolean);
       if (first) {
         list.replaceChildren(...nodes);
         scrollToEnd();
@@ -105,6 +110,7 @@ export function createFeed({
 
       setSentinel(hasMore ? 'more' : 'done');
       notify();
+      onPage?.(page);   // depois de desenhar: quem já virou nó não é redescoberto aqui
     } catch (err) {
       setSentinel('error', err);
       if (first) throw err;
@@ -142,10 +148,36 @@ export function createFeed({
     /** Acrescenta um item no fim (ex.: mensagem nova chegando). */
     append(...nodes) {
       const wasAtBottom = nearBottom();
-      list.append(...nodes.flat().filter(Boolean));
-      total += nodes.flat().filter(Boolean).length;
+      const alvos = nodes.flat().filter(Boolean);
+      list.append(...alvos);
+      total += alvos.length;
       if (wasAtBottom) scrollToEnd();
       notify();
+    },
+
+    /**
+     * Tira itens da lista. Serve para o que foi acrescentado e depois se revelou vazio —
+     * hoje: a bolha viva de um turno que acabou sem escrever texto. Sem isto ela ficava
+     * como um "(sem texto)" solto, e o contador do cabeçalho passava a mentir.
+     */
+    remove(...nodes) {
+      const alvos = nodes.flat().filter(Boolean);
+      for (const item of alvos) item.remove?.();
+      total = Math.max(0, total - alvos.length);
+      notify();
+    },
+
+    /**
+     * Manda para o fim um item JÁ contado. É como a bolha viva continua sendo a última
+     * quando um bloco novo (ferramenta, agente) entra na frente dela — a ordem na tela é
+     * a ordem em que as coisas aconteceram, como no terminal.
+     */
+    moveToEnd(node) {
+      if (!node) return;
+      const wasAtBottom = nearBottom();
+      node.remove?.();
+      list.append(node);
+      if (wasAtBottom) scrollToEnd();
     },
 
     scrollToEnd,

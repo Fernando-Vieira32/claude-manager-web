@@ -39,7 +39,7 @@ docker compose build --no-cache && ./docker-app.sh
 
 Para apontar outro caminho — por exemplo um `claude` do seu home, montado —, acrescente
 `CLAUDE_BIN` ao bloco `environment:` do `docker-compose.yml`. A ordem de resolução está em
-`services/chat/repo.js`: `CLAUDE_BIN` → `PATH` → locais conhecidos.
+`services/chat/bin.js`: `CLAUDE_BIN` → `PATH` → locais conhecidos.
 
 > Antes da dockerização este era o erro mais comum, por causa de `.desktop`/`systemd` sem
 > o PATH do nvm. Esse problema deixou de existir: o ambiente agora é o da imagem, igual
