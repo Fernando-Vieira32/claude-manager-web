@@ -94,7 +94,7 @@ document.getElementById('theme-toggle').addEventListener('click', () => {
 
 /* ------------------------------------------------- status do servidor */
 const sub = document.getElementById('brand-sub');
-let startCmd = 'cd ~/www/claude-manager-web && ./start.sh'; // atualizado no 1º ping
+let startCmd = './docker-app.sh'; // ganha o caminho da máquina no 1º ping
 
 const serverStatus = createServerStatus({
   onRestart: async () => {
@@ -129,7 +129,7 @@ async function ping() {
     await api.meta.health();
     serverStatus.set('up');
     const meta = await api.meta.services();
-    if (meta.root) startCmd = `cd ${meta.root} && ./start.sh`;
+    if (meta.hostRoot) startCmd = `cd ${meta.hostRoot} && ./docker-app.sh`;
     sub.textContent = `v${meta.version} · ${meta.services.length} serviços`;
   } catch {
     if (serverStatus.node.dataset.state !== 'wait') serverStatus.set('down');

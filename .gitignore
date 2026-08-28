@@ -1,3 +1,5 @@
 node_modules/
 *.log
 data/
+# gerado pelo docker-app.sh: uid e caminhos desta máquina (ver readme/14-docker.md)
+.env

@@ -99,7 +99,7 @@ export default {
 ## 4. Reinicie e confira
 
 ```bash
-npm run dev     # --watch já reinicia ao salvar
+./docker-app.sh dev   # o --watch de dentro já reinicia ao salvar
 curl -s localhost:7788/api/_services | grep -A3 '"id": "files"'
 curl -s 'localhost:7788/api/files?path=www'
 ```

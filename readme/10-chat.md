@@ -356,7 +356,8 @@ mesmos modos do terminal (`claude --permission-mode`), com nomes claros:
 explicando, a menos que o servidor tenha sido iniciado com a variável ligada:
 
 ```bash
-CHAT_ALLOW_FULL_TOOLS=1 npm start
+# no .env (o docker-app.sh cria; 0 deixa o chat só-leitura)
+CHAT_ALLOW_FULL_TOOLS=1
 ```
 
 O motivo: em modo headless **não existe o "perguntar antes"** do terminal — o modo já

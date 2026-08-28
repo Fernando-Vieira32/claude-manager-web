@@ -18,6 +18,7 @@ deles ficar gigante. Comece pelo primeiro se você acabou de chegar.
 | 11 | [Componentes](11-componentes.md) | catálogo das peças de UI (feed, chat, janela flutuante, image-tray…): contratos e como criar outra |
 | 12 | [Rodar em uma máquina nova](12-rodar-em-maquina-nova.md) | runbook de setup para a outra máquina: pré-requisitos, subir, verificar (Linux/Mac/Windows) |
 | 13 | [Testes](13-testes.md) | `npm test` com o runner embutido do Node (zero dependências), o sandbox que isola seus dados, e a tradução RSpec → `node:test` |
+| 14 | [Docker](14-docker.md) | usar e **desenvolver** em container (Linux): imagem com o CLI dentro, para entregar a quem não quer instalar Node |
 
 ## Em uma frase
 
@@ -30,10 +31,10 @@ para o projeto poder crescer até virar um editor de código no navegador.
 ## Atalhos rápidos
 
 ```bash
-./start.sh                  # sobe o servidor e abre o navegador
-npm run dev                 # servidor com --watch (reinicia ao salvar)
-npm test                    # suíte de testes (ver 13) — sem instalar nada
-PORT=9000 npm start         # outra porta
+./docker-app.sh             # sobe o container e abre o navegador (ver 14)
+./docker-app.sh dev         # modo desenvolvedor: reinicia ao salvar
+./docker-app.sh test        # suíte de testes dentro do container (ver 13)
+#   outra porta: troque PORT no .env
 curl -s localhost:7788/api/_services | less   # mapa das rotas registradas
 ```
 

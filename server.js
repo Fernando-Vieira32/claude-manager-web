@@ -3,7 +3,6 @@
 // Só orquestra: config -> router -> serviços -> estáticos. Nenhuma regra de negócio aqui.
 
 import http from 'node:http';
-import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { config } from './core/config.js';
 import { createRouter } from './core/router.js';
@@ -11,13 +10,24 @@ import { loadServices, listServices } from './core/registry.js';
 import { serveStatic } from './core/static.js';
 import { ApiError, sendJson, readJsonBody } from './core/http.js';
 
+// Um jeito só de rodar: em container. Fora dele o ambiente é loteria (versão do Node,
+// CLI do Claude, PATH do atalho) e a doc teria de descrever dois caminhos.
+if (!config.inContainer) {
+  console.error('\n  Este app roda em container.\n');
+  console.error('  Para usar:        ./docker-app.sh');
+  console.error('  Para desenvolver: ./docker-app.sh dev');
+  console.error('  Por quê e como:   readme/14-docker.md\n');
+  process.exit(1);
+}
+
 const router = createRouter();
 
 // rota de metadados: o front descobre por aqui quais serviços existem
 router.add('GET', '/api/_services', () => ({
   app: 'claude-manager-web',
   version: '0.1.0',
-  root: path.dirname(process.argv[1]), // raiz do projeto — o front monta o comando de iniciar
+  root: path.dirname(process.argv[1]), // raiz dentro do container (/app)
+  hostRoot: config.hostRoot,           // raiz na máquina — o front monta o comando de ligar
   services: listServices(),
   routes: router.list(),
 }));
@@ -32,18 +42,12 @@ router.add('POST', '/api/_server/stop', ({ res }) => {
   setTimeout(() => process.exit(0), 200);
 });
 
-// Reiniciar: sobe uma instância nova, destacada, que espera 1s (a porta liberar) e
-// então assume; depois este processo sai. Herdamos env (CHAT_ALLOW_FULL_TOOLS etc.).
+// Reiniciar: sai com código de FALHA e deixa o supervisor do container subir de novo
+// (o compose usa `restart: on-failure`). Antes daqui subíamos um processo destacado —
+// dentro do container isso não serve: quando o PID 1 morre, o filho morre com ele.
 router.add('POST', '/api/_server/restart', ({ res }) => {
-  const entry = process.argv[1];
-  spawn('sh', ['-c', 'sleep 1 && exec "$NODE" "$ENTRY"'], {
-    cwd: path.dirname(entry),
-    detached: true,
-    stdio: 'ignore',
-    env: { ...process.env, NODE: process.execPath, ENTRY: entry },
-  }).unref();
   sendJson(res, 200, { ok: true, restarting: true });
-  setTimeout(() => process.exit(0), 200);
+  setTimeout(() => process.exit(1), 200);
 });
 
 await loadServices(router);
