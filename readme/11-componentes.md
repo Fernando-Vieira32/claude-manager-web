@@ -486,7 +486,15 @@ conversas, o próprio CLI; ver [10](10-chat.md)).
   apaga tudo. Com outra resposta em voo isso apagaria a bolha dela; depois de um erro,
   apagaria a explicação do erro e sobraria uma janela vazia. Quem decide é a regra pura
   `core/response-end.js`, com spec na suíte — e a bolha informa se falhou pelo
-  `bubble.failed`.
+  `bubble.failed`;
+- **`reload()` espera o disco ter o turno.** O CLI grava o `.jsonl` **depois** de fechar o
+  stream (medido nesta máquina: no instante do `result` o arquivo só tinha a mensagem do
+  usuário; a resposta apareceu ~160-500 ms depois). Recarregar nessa janela trocava a bolha
+  que **tinha** a resposta por uma página que ainda não a tinha: a resposta desaparecia da
+  tela, sobrava a resposta anterior acima da mensagem recém-enviada, e reabrir a conversa
+  "consertava". Agora o `reload()` consulta a última mensagem do disco até ela ser uma
+  resposta posterior ao envio (`waitTurnOnDisk`, teto de ~1,8 s); se estourar o teto ele
+  **não recarrega** — manter o que a pessoa viu chegar é mais honesto que trocá-lo por nada.
 
 Antes a fila era **aqui**: a segunda mensagem ficava presa no navegador e só saía
 quando a primeira acabava. Era o oposto do terminal, onde a mensagem chega em quem

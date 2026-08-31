@@ -17,7 +17,7 @@ import { messageItems } from './message-items.js';
 import { createLiveAnswer } from './live-answer.js';
 import { createQuickReplyHost } from './quick-reply-host.js';
 import { createAgentStrip } from './agent-strip.js';
-import { afterResponse } from '../core/response-end.js';
+import { afterResponse, waitTurnOnDisk } from '../core/response-end.js';
 
 /**
  * @param {object} opts
@@ -52,6 +52,9 @@ export function createChat({
   // Blocos lidos do disco que têm relógio vivo (cartão de agente ainda rodando). Quem
   // criou destrói: recarregar o feed troca os nós, e timer de nó removido é vazamento.
   let doDisco = [];
+  // Instante do último envio cujo turno pode ainda não estar gravado no .jsonl. Enquanto
+  // for > 0, recarregar o feed é perigoso: ver `waitTurnOnDisk` em core/response-end.js.
+  let envioPendente = 0;
   const soltarDoDisco = () => {
     agentes.clear();                                        // a faixa é redesenhada com o feed
     for (const item of doDisco.splice(0)) item.destroy?.();
@@ -139,6 +142,7 @@ export function createChat({
     composer.setHint('enviando…');
 
     const urls = images.map((im) => `data:${im.media_type};base64,${im.data}`);
+    envioPendente = Date.now();   // daqui até o disco ter o turno, não se recarrega o feed
     feed.append(messageBubble({ role: 'user', text, at: new Date().toISOString(), images: urls }));
 
     // bolha viva + tradutor do stream vêm juntos no `live-answer` (a mesma peça que
@@ -179,8 +183,29 @@ export function createChat({
     composer,
 
     attach(scroller) { feed.attach(scroller); return this; },
-    start() { soltarDoDisco(); return feed.loadFirst(); },
-    reload() { soltarDoDisco(); return feed.loadFirst(); },
+    start() { envioPendente = 0; soltarDoDisco(); return feed.loadFirst(); },
+
+    /**
+     * Troca o que está na tela pelas mensagens do disco. **Espera o disco ter o último
+     * turno**: o CLI grava o `.jsonl` depois de fechar o stream, e recarregar antes disso
+     * apagava a resposta que você acabou de ver chegar (ver `core/response-end.js`).
+     * Se o turno não aparecer no tempo, não recarrega — a tela fica com o que já tem.
+     */
+    async reload() {
+      const pronto = await waitTurnOnDisk({
+        sentAt: envioPendente,
+        fetchLast: async () => {
+          const page = await fetchPage({ limit: 1 }).catch(() => null);
+          const itens = page?.messages || page?.items || [];
+          return itens[itens.length - 1];
+        },
+        sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
+      });
+      if (!pronto) return undefined;
+      envioPendente = 0;
+      soltarDoDisco();
+      return feed.loadFirst();
+    },
 
     /**
      * Envia um texto por código, com os valores atuais dos campos — o mesmo
