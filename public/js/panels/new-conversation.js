@@ -83,6 +83,11 @@ export default {
           ? api.conversations.read(id, opts)
           : Promise.resolve({ messages: [], total: 0, from: 0, hasMore: false })),
 
+        // o `id` só existe depois do primeiro `init`; até lá não há agente para abrir
+        fetchAgentSteps: (agentId) => (id
+          ? api.conversations.agentSteps(id, agentId)
+          : Promise.reject(new Error('a conversa ainda está sendo criada'))),
+
         send: (t, values, imgs, onEvent, signal) => {
           const opts = { text: t, mode: values.mode, model: values.model, images: imgs };
           if (id) return api.chat.send(id, opts, onEvent, signal);

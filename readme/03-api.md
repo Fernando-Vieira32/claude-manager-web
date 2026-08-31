@@ -112,6 +112,7 @@ curl -s -X POST localhost:7788/api/sessions/30498/kill \
 | --- | --- | --- |
 | GET | `/api/conversations?q=` | lista as transcrições |
 | GET | `/api/conversations/:id?limit=20&before=` | janela de mensagens (leitura paginada) |
+| GET | `/api/conversations/:id/agents/:ref?limit=400` | **os passos de um subagente**: o que ele fez, em blocos |
 | POST | `/api/conversations/:id/rename` | renomeia (`{ "name": "..." }`) — o mesmo que `/rename` |
 | DELETE | `/api/conversations/:id` | move para a lixeira |
 | GET | `/api/conversations/trash` | lista a lixeira |
@@ -210,7 +211,30 @@ curl -s "localhost:7788/api/conversations/$ID?limit=5&before=5"
 | --- | --- |
 | `text` | prosa. É o que vai na caixa de mensagem — e **só** isso |
 | `tool` | uma chamada de ferramenta: `input` (o pedido, já em texto), `result` (o que voltou, ou `null` se ainda não voltou), `summary` (a frase curta do chip) |
-| `agent` | um subagente: `name` é o que ele foi fazer, `running` diz se ainda está de pé, `report`/`summary` é o que ele devolveu, `durationMs` quanto levou e `status` como terminou (`completed`, `failed` ou **`unknown`** = sem aviso de fim no arquivo) |
+### Os passos de um subagente
+
+O trabalho de um agente **não está** no arquivo da conversa — medido: zero entradas de
+sidechain em 923 transcritos. O CLI grava cada subagente num arquivo próprio, ao lado:
+`~/.claude/projects/<projeto>/<sessão>/subagents/agent-<agentId>.jsonl`, no mesmo formato.
+Por isso a rota devolve **os mesmos blocos** de uma conversa, e a tela os desenha com os
+mesmos componentes.
+
+```bash
+# `:ref` é o id do DISPARO (o `id` do bloco `agent`) — o servidor traduz para o arquivo
+curl -s "localhost:7788/api/conversations/$ID/agents/toolu_013TJf…?limit=5"
+# { "ref": "toolu_013TJf…",
+#   "meta": { "agentType": "general-purpose", "description": "Por que o /resume não lista", "model": "opus" },
+#   "lastActivityAt": "2026-08-25T14:48:44.984Z",   ← última vez que ele escreveu algo
+#   "total": 37, "from": 32,                        ← veio cortado: mostra os últimos 5
+#   "messages": [ { "role": "assistant", "blocks": [ … ] } ] }
+```
+
+O **id estável** do agente nunca vai para a tela (o próprio CLI pede isso), então o pedido
+é pelo id do disparo e a tradução acontece no servidor, pelo `toolUseId` que está no
+`.meta.json` de cada agente. Agente cujo arquivo o CLI já limpou responde **404** com
+"os passos deste agente não estão mais no disco" — e não um 404 genérico de conversa.
+
+| `agent` | um subagente: `name` é o que ele foi fazer, `running` diz se ainda está de pé, `report`/`summary` é o que ele devolveu, `durationMs` quanto levou e `status` como terminou (`completed`, `failed`, `killed`, `stopped` — ou **`unknown`** = sem aviso de fim no arquivo). **Aviso de fim = parou**, qualquer status: só `running` mantém de pé. Sem aviso, quem julga é o transcrito do próprio agente — daí `summary: 'terminou (sem aviso no arquivo)'` com o relatório tirado da última fala dele |
 
 Por que blocos, e não `text` + `tools` como antes: empilhar as ferramentas no pé da
 mensagem embrulhava numa caixa o que o terminal mostra separado, **trocava a ordem** (a

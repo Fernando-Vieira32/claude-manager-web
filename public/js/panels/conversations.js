@@ -174,6 +174,7 @@ export default {
         modelChoices: MODEL_CHOICES,
         swatches: WINDOW_COLORS,
         fetchPage: (opts) => api.conversations.read(c.id, opts),
+        fetchAgentSteps: (agentId) => api.conversations.agentSteps(c.id, agentId),
         send: (text, values, images, onEvent, signal) =>
           api.chat.send(c.id, { text, mode: values.mode, model: values.model, images }, onEvent, signal),
         // canal da conversa: o que o Claude faz sem você pedir também aparece

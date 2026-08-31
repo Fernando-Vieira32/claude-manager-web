@@ -17,11 +17,14 @@ import { messageItems } from './message-items.js';
 import { createLiveAnswer } from './live-answer.js';
 import { createQuickReplyHost } from './quick-reply-host.js';
 import { createAgentStrip } from './agent-strip.js';
+import { createAgentSteps } from './agent-steps.js';
 import { afterResponse, waitTurnOnDisk } from '../core/response-end.js';
 
 /**
  * @param {object} opts
  * @param {(args:{limit:number,before?:number}) => Promise<object>} opts.fetchPage
+ * @param {(agentId:string) => Promise<object>} [opts.fetchAgentSteps] os passos de um
+ *   subagente, buscados quando o cartão dele é aberto (sem isto o cartão não oferece)
  * @param {(text:string, values:object, images:Array, onEvent:Function, signal:AbortSignal) => Promise<void>} opts.send
  * @param {() => Promise<any>} [opts.onStop] cancelamento do lado do servidor
  * @param {Array} [opts.fields] campos do composer (ver composer.js)
@@ -37,6 +40,7 @@ import { afterResponse, waitTurnOnDisk } from '../core/response-end.js';
  */
 export function createChat({
   fetchPage,
+  fetchAgentSteps,
   send,
   onStop,
   fields = [],
@@ -60,9 +64,14 @@ export function createChat({
     for (const item of doDisco.splice(0)) item.destroy?.();
   };
 
+  // o que o cartão de um agente chama ao ser aberto: buscar os passos dele e desenhá-los
+  // ali dentro. Sem `fetchAgentSteps` o cartão simplesmente não oferece isso.
+  const passosDoAgente = fetchAgentSteps ? createAgentSteps({ fetch: fetchAgentSteps }) : undefined;
+
   const feed = createFeed({
     fetchPage,
     renderItem: (item) => renderMessage(item, {
+      onAgentOpen: passosDoAgente,
       // cartão de agente lido do disco: o relógio é nosso para parar, e se ele ainda
       // está rodando entra na faixa do rodapé como qualquer outro
       keep: (card, block) => {
@@ -89,7 +98,9 @@ export function createChat({
   const autos = new Set();  // { resposta }
   // Faixa dos agentes em segundo plano: fica no rodapé, acima da caixa, como no terminal —
   // um agente que roda dez minutos não pode exigir rolar o feed para saber se está de pé.
-  const agentes = createAgentStrip({ onPick: () => feed.scrollToEnd() });
+  // clicar numa linha abre, ALI MESMO, o que aquele agente está fazendo — sem sair de onde
+  // você está. A primeira versão rolava a conversa até o cartão dele, e não era isso.
+  const agentes = createAgentStrip({ onExpand: passosDoAgente });
   // resposta de FUNDO: hospeda blocos de agente que não pertencem a turno nenhum
   let fundo = null;
   // botões de resposta rápida: peça própria (detecta as opções e se limpa sozinha)
@@ -147,7 +158,9 @@ export function createChat({
 
     // bolha viva + tradutor do stream vêm juntos no `live-answer` (a mesma peça que
     // mostra a resposta que o Claude começa por conta própria)
-    const resposta = createLiveAnswer({ feed, agents: agentes, onHint: (t) => composer.setHint(t) });
+    const resposta = createLiveAnswer({
+      feed, agents: agentes, onAgentOpen: passosDoAgente, onHint: (t) => composer.setHint(t),
+    });
     const voo = { controller: new AbortController(), resposta };
     emVoo.add(voo);
 
@@ -245,7 +258,7 @@ export function createChat({
      * de agente deixaria a caixa em estado de resposta para sempre.
      */
     agentEvent(event) {
-      fundo = fundo || createLiveAnswer({ feed, agents: agentes });
+      fundo = fundo || createLiveAnswer({ feed, agents: agentes, onAgentOpen: passosDoAgente });
       fundo.onEvent(event);
       return this;
     },
@@ -261,7 +274,7 @@ export function createChat({
      * cima dela.
      */
     watch({ label = 'retomou sozinho…' } = {}) {
-      const resposta = createLiveAnswer({ feed, label, agents: agentes });
+      const resposta = createLiveAnswer({ feed, label, agents: agentes, onAgentOpen: passosDoAgente });
       const voo = { resposta };
       autos.add(voo);
       return {

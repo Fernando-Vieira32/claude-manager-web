@@ -31,7 +31,7 @@ import { createStreamSink } from './stream-sink.js';
  *   guarda o cartão dele não pode ser esta resposta
  * @returns {{bubble:object, onEvent:Function, finish:Function, destroy:Function}}
  */
-export function createLiveAnswer({ feed, label = 'pensando…', onHint, agents } = {}) {
+export function createLiveAnswer({ feed, label = 'pensando…', onHint, agents, onAgentOpen } = {}) {
   const startedAt = Date.now();
   const porId = new Map();     // id do tool_use -> { kind, call|card }
   const vivos = [];            // tudo com timer/listener: destruir no fim
@@ -110,7 +110,9 @@ export function createLiveAnswer({ feed, label = 'pensando…', onHint, agents }
      * disparo), então quem o encerra é o aviso de fim (`agentEnd`).
      */
     addAgent({ id, name, agentType, model, parentId } = {}) {
-      const card = createAgentCard({ name, agentType, model, running: true });
+      const card = createAgentCard({
+        name, agentType, model, running: true, stepsRef: id || null, onOpen: onAgentOpen,
+      });
       card.node.classList.add('feed-block', 'feed-agent');
       if (id) porId.set(id, card);
       vivos.push(card);
@@ -133,7 +135,7 @@ export function createLiveAnswer({ feed, label = 'pensando…', onHint, agents }
         agents?.end(id, fim, taskId);
         return surface;
       }
-      if (!agents?.end(id, fim, taskId)) empilhar(orfao({ summary, result, status }));
+      if (!agents?.end(id, fim, taskId)) empilhar(orfao({ summary, result, status, taskId }));
       return surface;
     },
 
@@ -170,8 +172,11 @@ export function createLiveAnswer({ feed, label = 'pensando…', onHint, agents }
   };
 
   /** Cartão de um agente que terminou sem termos visto nascer (janela aberta no meio). */
-  function orfao({ summary, result, status }) {
-    const card = createAgentCard({ name: summary || 'agente', running: false, report: result, status });
+  function orfao({ summary, result, status, taskId }) {
+    const card = createAgentCard({
+      name: summary || 'agente', running: false, report: result, status,
+      stepsRef: taskId || null, onOpen: onAgentOpen,
+    });
     card.node.classList.add('feed-block', 'feed-agent');
     vivos.push(card);
     return card.node;

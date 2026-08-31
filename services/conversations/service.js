@@ -5,6 +5,7 @@ import {
   renameConversation,
 } from './repo.js';
 import { listTrash, restoreFromTrash, purgeTrash } from './trash.js';
+import { getAgentSteps } from './subagent.js';
 
 export default {
   id: 'conversations',
@@ -35,6 +36,13 @@ export default {
       path: '/trash/purge',
       summary: 'apaga da lixeira o que é mais velho que a retenção (body: { value, unit, dryRun })',
       handler: async ({ body }) => purgeTrash(body),
+    },
+    {
+      method: 'GET',
+      path: '/:id/agents/:ref',
+      summary: 'os passos de um subagente pelo id do disparo (?limit=400), em blocos',
+      handler: async ({ params, query }) =>
+        getAgentSteps(params.id, params.ref, { limit: Number(query.limit) || undefined }),
     },
     {
       method: 'GET',

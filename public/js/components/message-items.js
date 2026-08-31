@@ -22,9 +22,11 @@ import { createAgentCard } from './agent-card.js';
  *   de agente ainda rodando) e o bloco de origem, para quem monta poder destruí-lo ao
  *   recarregar o feed — nó removido da tela com relógio vivo é vazamento — e colocá-lo na
  *   faixa de "rodando agora"
+ * @param {(ref:string, card:object) => Promise<number>} [opts.onAgentOpen] busca os
+ *   passos de um agente quando o cartão dele é aberto (ver `agent-steps.js`)
  * @returns {Array<Node>} um nó por bloco — o feed achata a lista
  */
-export function messageItems(msg = {}, { onToggle, keep } = {}) {
+export function messageItems(msg = {}, { onToggle, keep, onAgentOpen } = {}) {
   const { role = 'assistant', at, badge, blocks } = msg;
   // mensagem antiga (ou de outro caminho) sem blocos: continua desenhando como texto
   if (!Array.isArray(blocks)) return [messageBubble(msg)];
@@ -32,7 +34,7 @@ export function messageItems(msg = {}, { onToggle, keep } = {}) {
   let primeiro = true;
   const nodes = [];
   for (const block of blocks) {
-    const node = render(block, { role, at: primeiro ? at : null, badge, onToggle, keep });
+    const node = render(block, { role, at: primeiro ? at : null, badge, onToggle, keep, onAgentOpen });
     if (!node) continue;
     nodes.push(node);
     primeiro = false;    // só o primeiro bloco leva o cabeçalho com quem falou e quando
@@ -40,7 +42,7 @@ export function messageItems(msg = {}, { onToggle, keep } = {}) {
   return nodes;
 }
 
-function render(block, { role, at, badge, onToggle, keep }) {
+function render(block, { role, at, badge, onToggle, keep, onAgentOpen }) {
   if (block?.kind === 'text') {
     return messageBubble({ role, text: block.text, at, badge });
   }
@@ -63,6 +65,9 @@ function render(block, { role, at, badge, onToggle, keep }) {
       startedAt: block.startedAt || null,
       status: block.status || 'completed',
       onToggle,
+      // o id do disparo é a chave dos passos dele (o servidor traduz para o arquivo)
+      stepsRef: block.id || null,
+      onOpen: onAgentOpen,
     });
     // rodando = relógio vivo: quem montou precisa poder pará-lo
     if (card.running) keep?.(card, block);

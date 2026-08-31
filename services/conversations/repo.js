@@ -6,6 +6,7 @@ import { config } from '../../core/config.js';
 import { fold, resolveConversationId } from '../../core/claude-paths.js';
 import { messageText, isNoiseText } from '../../core/claude-blocks.js';
 import { loadMessages, invalidate, runningAgents } from './messages.js';
+import { settleOpenAgents } from './subagent.js';
 import { contextWindowOf, readCatalogCache } from '../../core/claude-models.js';
 import { localStamp } from './trash.js';
 import { badRequest, notFound } from '../../core/http.js';
@@ -210,6 +211,8 @@ export async function renameConversation(id, rawName) {
 export async function getConversation(id, { limit = 20, before } = {}) {
   const { file, projectDir } = resolveId(id);
   const { stat, messages } = await loadMessages(file);
+  // agente que ficou "de pé" sem aviso: quem julga é o transcrito dele (ver subagent.js)
+  await settleOpenAgents(id, messages);
 
   const total = messages.length;
   const size = Math.min(Math.max(Number(limit) || 20, 1), 500);

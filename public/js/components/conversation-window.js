@@ -57,6 +57,7 @@ export function createConversationWindow({
   modelChoices = [],
   swatches = [],
   fetchPage,
+  fetchAgentSteps,
   send,
   watch,
   stop,
@@ -99,6 +100,7 @@ export function createConversationWindow({
   const chat = createChat({
     pageSize: 20,
     fetchPage,
+    fetchAgentSteps,
     send,
     onStop: stop,
     // o texto que aparece na bolha é o mesmo que vai para o servidor

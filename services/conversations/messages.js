@@ -105,6 +105,9 @@ function build(entries) {
       role: e.type,
       at: e.timestamp || null,
       human: e.origin?.kind === 'human',
+      // `end_turn` = ele parou de falar; `tool_use` = está esperando uma ferramenta. É o que
+      // permite saber se um subagente ENTREGOU a resposta (ver subagent.js#settleOpenAgents)
+      stopReason: e.message?.stop_reason || null,
       blocks,
     });
   }
@@ -208,13 +211,19 @@ function resolver(alvo, block, porAgente) {
   Object.assign(alvo, { running: false, report: result.text, summary: 'terminou' });
 }
 
-// O próprio CLI avisa que o mesmo agente pode notificar mais de uma vez: ele para, você
-// manda outra mensagem, ele volta. Então "terminou" é o que o `status` disser, não o fato
-// de ter chegado um aviso.
-const FIM = new Set(['completed', 'failed']);
-
+// AVISO DE FIM = ele parou. O próprio CLI diz isso na nota do aviso: *"a task-notification
+// fires each time this agent stops"*.
+//
+// Antes daqui havia uma lista de status "terminais" (`completed`, `failed`) e qualquer outro
+// contava como ainda de pé. Isso apodreceu na primeira semana: nos transcritos desta
+// máquina os status são `completed` (2443), `failed` (172), **`killed` (168)** e
+// **`stopped` (20)** — ou seja, 188 avisos de agente encerrado eram lidos como "rodando", e
+// um agente `killed` ficou com relógio correndo 195 minutos na tela.
+//
+// Então a regra inverteu: parou, a menos que o aviso diga explicitamente `running`. Assim um
+// status novo do CLI (`cancelled`, `timeout`…) entra como fim, e não como relógio eterno.
 const endOf = (fim, disparo, aviso) => ({
-  running: !FIM.has(fim.status),
+  running: fim.status === 'running',
   summary: fim.summary,
   report: fim.result.slice(0, MAX_TEXT),
   status: fim.status,

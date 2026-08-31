@@ -17,9 +17,14 @@
 
 import { el } from '../core/ui.js';
 import { createActivity } from './activity.js';
+import { createStepsBox } from './agent-steps.js';
 
 const VAZIO = 'sem relatório registrado';
-const CHIP = { failed: 'warn', unknown: '' };
+// `killed`/`stopped` são fim de verdade (medido: 188 casos nos transcritos), e nenhum deles
+// é sucesso — chip verde ali seria mentira. "não sei" fica neutro, sem verde nem alerta.
+const CHIP = {
+  failed: 'warn', killed: 'warn', stopped: 'warn', unknown: '',
+};
 
 /**
  * @param {object} opts
@@ -33,10 +38,16 @@ const CHIP = { failed: 'warn', unknown: '' };
  * @param {string} [opts.status] `completed` | `failed` — como ele terminou
  * @param {string|number} [opts.startedAt] quando ele foi disparado (ISO ou ms)
  * @param {(open:boolean) => void} [opts.onToggle] avisa quem precisa reajustar o scroll
+ * @param {string} [opts.stepsRef] por qual id se pedem os passos deste agente — o do
+ *   DISPARO, que é o que a tela conhece (o id estável do agente nunca vem para cá)
+ * @param {(ref:string, card:object) => Promise<number>} [opts.onOpen] busca os passos ao
+ *   abrir o cartão pela primeira vez e os põe aqui com `addChild`. Só callback: o cartão
+ *   não conhece rota nem api
  */
 export function createAgentCard({
   name = 'agente', agentType = '', model = '', running = true,
   summary = '', report = '', durationMs = null, status = 'completed', startedAt = null, onToggle,
+  stepsRef = null, onOpen,
 } = {}) {
   const caret = el('span', { class: 'agent-caret' }, '▸');
   // o relógio conta do DISPARO quando ele é conhecido (cartão lido do disco), não de agora
@@ -53,13 +64,14 @@ export function createAgentCard({
     model ? el('span', { class: 'chip agent-model' }, model) : null,
     activity.node, fim);
 
-  const saida = el('pre', { class: 'tool-out' }, 'trabalhando…');
-  const passos = el('div', { class: 'agent-kids' });
-  const blocoPassos = el('div', { class: 'tool-block', hidden: true },
-    el('span', { class: 'tool-key' }, 'passos'), passos);
+  // enquanto ele roda não existe relatório: dizer "trabalhando…" aqui sugeria que este
+  // campo ia se encher aos poucos, e ele só é escrito de uma vez, no fim
+  const saida = el('pre', { class: 'tool-out' }, 'o relatório chega quando ele terminar');
+  // a caixa dos passos é a MESMA peça que a faixa do rodapé usa (agent-steps.js)
+  const passos = createStepsBox({ ref: stepsRef, onOpen });
   const detalhe = el('div', { class: 'agent-detail', hidden: true },
     el('div', { class: 'tool-block' }, el('span', { class: 'tool-key' }, 'relatório'), saida),
-    blocoPassos);
+    passos.node);
 
   const node = el('div', { class: 'agent-card running' }, head, detalhe);
 
@@ -69,23 +81,26 @@ export function createAgentCard({
     node.classList.toggle('open', aberto);
     head.setAttribute('aria-expanded', String(aberto));
     caret.textContent = aberto ? '▾' : '▸';
+    if (aberto) passos.load();
     onToggle?.(aberto);
   };
   head.addEventListener('click', alterna);
 
   let vivo = false;
-  let nFilhos = 0;
 
   const api = {
     node,
     get running() { return vivo; },
 
+    /** Abre o cartão (e busca os passos). Idempotente: aberto, fica aberto. */
+    open() {
+      if (detalhe.hidden) alterna();
+      return api;
+    },
+
     /** Um passo do agente (uma ferramenta que ele rodou). Recebe o nó já montado. */
     addChild(childNode) {
-      if (!childNode) return api;
-      nFilhos += 1;
-      blocoPassos.hidden = false;
-      passos.append(childNode);
+      passos.addChild(childNode);
       return api;
     },
 

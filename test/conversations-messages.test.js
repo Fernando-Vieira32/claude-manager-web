@@ -258,6 +258,45 @@ describe('agente no histórico', () => {
     assert.equal(agente.report, 'estourou');
   });
 
+  // Aviso de fim = ele PAROU. Havia uma lista de status "terminais" (`completed`,
+  // `failed`) e qualquer outro contava como de pé — mas nos transcritos desta máquina
+  // existem `killed` (168) e `stopped` (20). Um agente `killed` ficou com relógio correndo
+  // 195 minutos na tela, com o aviso de fim dele no arquivo.
+  for (const status of ['killed', 'stopped']) {
+    it(`aviso com status "${status}" encerra o agente (é fim de verdade)`, async () => {
+      const id = await givenTranscript(
+        fala('vai'),
+        dispara('t1', 'Lane 1'),
+        notifica('t1', { status, result: 'parei' }),
+      );
+
+      const [agente] = blocos(await ler(id), 'agent');
+
+      assert.equal(agente.running, false);
+      assert.equal(agente.status, status);
+    });
+  }
+
+  it('status que eu nunca vi antes também encerra — a regra é "parou, a menos que diga running"', async () => {
+    const id = await givenTranscript(
+      fala('vai'),
+      dispara('t1', 'Lane 1'),
+      notifica('t1', { status: 'cancelled_by_user', result: '' }),
+    );
+
+    assert.equal(blocos(await ler(id), 'agent')[0].running, false);
+  });
+
+  it('aviso dizendo `running` mantém o agente de pé (o CLI avisa e ele segue)', async () => {
+    const id = await givenTranscript(
+      fala('vai'),
+      dispara('t1', 'Lane 1'),
+      notifica('t1', { status: 'running', result: '' }),
+    );
+
+    assert.equal(blocos(await ler(id), 'agent')[0].running, true);
+  });
+
   it('sem aviso de fim, mas o CLI diz que ninguém está de pé: "não sei", não relógio correndo', async () => {
     // acontece de verdade: o aviso pode ter ficado fora do arquivo depois de um /compact
     const id = await givenTranscript(

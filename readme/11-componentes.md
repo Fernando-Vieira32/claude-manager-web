@@ -19,6 +19,7 @@ public/js/components/
   message-items.js  quebra uma mensagem lida do disco nos blocos dela, na ordem
   agent-card.js   um agente como bloco próprio (relógio vivo + relatório)
   agent-strip.js  os agentes em segundo plano da conversa (faixa do rodapé + registro)
+  agent-steps.js  os passos de um agente dentro do cartão dele (o que ele fez)
   composer.js     caixa de escrever com campos de opção e enviar/parar
   chat.js         feed + composer + envio = vista de conversa
   live-answer.js  uma resposta chegando: bolha viva + tradutor, já dentro do feed
@@ -155,9 +156,14 @@ Um **agente** como bloco próprio da conversa: nome, tipo, relógio vivo e o rel
 quando ele volta.
 
 ```js
-const card = createAgentCard({ name: 'Lane 1', agentType: 'general-purpose', startedAt });
+const card = createAgentCard({
+  name: 'Lane 1', agentType: 'general-purpose', startedAt,
+  stepsRef: block.id,          // por qual id se pedem os passos dele (o id do DISPARO)
+  onOpen: passosDoAgente,      // callback: busca e enche o cartão (ver agent-steps.js)
+});
 feed.append(card.node);
-card.addChild(toolCall.node);                      // o que ele fez, quando se sabe
+card.open();                                       // abre e busca os passos
+card.addChild(toolCall.node);                      // um passo dele
 card.finish({ summary: 'terminou', report: '…', durationMs: 726000, status: 'completed' });
 card.running;                                      // ainda de pé?
 card.destroy();                                    // tem timer: sempre
@@ -170,13 +176,52 @@ aceite do disparo, e o trabalho chega minutos depois num aviso separado
 mensagem já terminada. Cria com `running: false` para um agente que já voltou (é o caso da
 leitura do disco); `startedAt` faz o relógio contar do disparo de verdade.
 
+**Abrir mostra o que ele fez.** Antes, abrir um agente rodando dava só "relatório:
+trabalhando…" — a queixa que gerou isto. Os passos dele vêm de um arquivo próprio
+([10](10-chat.md#agentes-em-segundo-plano)) e são buscados **na primeira abertura**, nunca
+antes: transcrito de agente passa de 800 KB, e pré-carregar isso para cada cartão da
+conversa seria absurdo. Falhou? A próxima abertura tenta de novo, e o motivo aparece no
+lugar dos passos. Sem `onOpen` o cartão simplesmente não oferece — nada quebra.
+
+Enquanto ele roda, o campo do relatório diz *"o relatório chega quando ele terminar"*, e
+não "trabalhando…": aquele texto sugeria que o campo ia se enchendo aos poucos, quando ele
+é escrito de uma vez, no fim.
+
+## `agent-steps.js`
+
+Os **passos** de um agente — o "o que ele está fazendo". Duas peças, porque isso aparece em
+**dois lugares** (o cartão na conversa e a linha da faixa do rodapé) e a lógica de "abre,
+busca uma vez, avisa se falhou" não pode ser escrita duas vezes:
+
+```js
+const passos = createAgentSteps({ fetch: (ref) => api.conversations.agentSteps(id, ref) });
+
+createAgentCard({ ..., stepsRef: block.id, onOpen: passos });   // no feed
+createAgentStrip({ onExpand: passos });                         // no rodapé
+
+const caixa = createStepsBox({ ref, onOpen: passos });   // a caixa em si
+caixa.node;                  // vai onde você quiser
+caixa.addChild(node);        // um passo (serve para o que chega ao vivo, pelo stream)
+await caixa.load();          // busca (uma vez); erro fica escrito no lugar dos passos
+caixa.vazia;                 // nada entrou ainda?
+```
+
+Não desenha nada de novo: os passos vêm nos **mesmos blocos** de uma conversa, então quem
+os desenha é o [`message-items`](#message-itemsjs) — as mesmas bolhas e as mesmas chamadas
+de ferramenta. Se a resposta veio cortada pelo teto, ele diz isso no meio dos passos
+("mostrando os últimos N de M"): mostrar 400 de 900 calado deixaria você achar que o agente
+fez só aquilo.
+
+Recebe **como** buscar por parâmetro — não conhece `api.js`, rota nem painel.
+
 ## `agent-strip.js`
 
 Os agentes em segundo plano **da conversa**: a faixa de "rodando agora" (acima da caixa de
 escrever, como o painel fixo do terminal) **e** o registro de qual cartão é de quem.
 
 ```js
-const agentes = createAgentStrip({ onPick: () => feed.scrollToEnd() });
+// clicar numa linha: a faixa ABRE o cartão do agente e passa o nó, para quem monta rolar
+const agentes = createAgentStrip({ onPick: (id, node) => node?.scrollIntoView(...) });
 agentes.track({ id, name, agentType, card, startedAt });   // entrou
 agentes.track({ id, card });        // o cartão dele foi desenhado depois: liga os dois
 agentes.alias(agentId, id);         // id ESTÁVEL do agente -> o disparo dele
@@ -196,6 +241,18 @@ conhece aquele id, e aí quem chamou decide o que fazer com o relatório (nunca 
 `alias` existe porque o aviso de fim casa pelo **id estável** do agente, e num agente
 RETOMADO ele vem com o id da chamada que o retomou — sem o laço, o relatório não acha o
 cartão ([10](10-chat.md#agentes-em-segundo-plano)).
+
+**Clicar numa linha abre ALI MESMO o que aquele agente está fazendo** — o rodapé é onde
+você está olhando. A caixa é a mesma peça do cartão
+([`agent-steps`](#agent-stepsjs)); a faixa só a hospeda, com teto de altura e rolagem
+própria (um agente com 40 passos não pode empurrar a caixa de escrever para fora da tela).
+
+Duas versões erradas antes disso, e as duas por não olhar a tela do dono:
+
+1. `onPick: () => feed.scrollToEnd()` — rolava o feed até o **fim**, onde o cartão do agente
+   quase nunca está. Parecia que o clique não fazia nada;
+2. rolar até o cartão **na conversa** e abri-lo lá — funcionava, mas tirava a pessoa de onde
+   ela estava. "O conteúdo devia aparecer **aqui**", com a seta apontando para a faixa.
 
 Entrada **sem cartão** é normal: ao abrir a conversa, a faixa é preenchida pelo resumo da
 leitura (`page.agents`) e o bloco do disparo pode estar 200 mensagens atrás. Quando ele

@@ -479,7 +479,7 @@ que o CLI grava, medido num transcript de verdade:
 | --- | --- | --- |
 | `tool_use` `Agent` (ou `Task`) com `description`/`subagent_type` | no disparo | o agente **nasceu** |
 | `tool_result` "Async agent launched successfully… agentId: a96a…" | ~3 s depois | só o **aceite** do disparo — não é o trabalho. Mas é aqui que vem o **id estável** do agente |
-| `<task-notification>` numa entrada `user`, com `<tool-use-id>`, `<status>`, `<summary>`, `<result>` | quando ele para (minutos depois) | o agente **terminou**, e aqui está o relatório |
+| `<task-notification>` numa entrada `user`, com `<tool-use-id>`, `<status>`, `<summary>`, `<result>` | quando ele para (minutos depois) | o agente **parou**, e aqui está o relatório |
 | `pendingBackgroundAgentCount` no `system/turn_duration` | a cada turno, **só quando é maior que zero** | quantos ainda estão de pé; **ausente = nenhum** |
 
 Daí três eventos separados no contrato (`agentStart`, `toolResult { ack }`, `agentEnd`) e
@@ -504,6 +504,68 @@ o desenho da tela:
   real. Casando só pelo disparo, aquele relatório não achava dono e o cartão ficava
   "rodando…" com doze minutos de trabalho perdidos. O id estável nunca vai para a tela: o
   próprio CLI pede para não mostrá-lo.
+
+### O que ele está fazendo: o transcrito do subagente
+
+O trabalho do agente **não está** no arquivo da conversa. Procurei: **zero** entradas de
+sidechain em 923 transcritos. O CLI grava cada subagente num arquivo próprio, ao lado:
+
+```
+~/.claude/projects/<projeto>/<sessão>/subagents/agent-<agentId>.jsonl     ← o que ele fez
+~/.claude/projects/<projeto>/<sessão>/subagents/agent-<agentId>.meta.json  ← tipo, modelo, description, toolUseId
+```
+
+No **mesmo formato** das conversas (`isSidechain: true`, o mesmo envelope
+`message.content`), então quem lê conversa lê isto e a tela desenha com os mesmos
+componentes. O `<output-file>` em `/tmp` que aparece no aviso de fim é só um **atalho** para
+esse arquivo — mirar nele seria acoplar a um caminho volátil (e, rodando em container, o
+`/tmp` é outro).
+
+Daí o desenho: **clicar no agente abre o cartão e busca os passos** dele
+([`agent-steps`](11-componentes.md#agent-stepsjs)), na primeira abertura e só nela —
+transcrito de agente passa de 800 KB. O pedido usa o id do **disparo**, porque o id estável
+do agente nunca vai para a tela; a tradução acontece no servidor pelo `toolUseId` do
+`.meta.json` (ver [03 · API](03-api.md#os-passos-de-um-subagente)).
+
+O `mtime` desse arquivo é, de quebra, o sinal honesto de "ele mexeu por último quando?" —
+devolvido como `lastActivityAt`.
+
+#### E é esse arquivo que mata o agente fantasma
+
+Quando o aviso de fim não chega ao arquivo **e** a conversa não tem o contador do CLI, nada
+fechava o agente: numa conversa real, **5 agentes de 19 dias** seguiam com relógio correndo
+na faixa do rodapé. Só que o transcrito dos cinco terminava com a resposta entregue.
+
+Então, para cada agente que sobra aberto, o servidor pergunta ao transcrito **dele**
+(`settleOpenAgents`), com regra estrutural e sem teto de tempo:
+
+| O que o transcrito dele mostra por último | Conclusão |
+| --- | --- |
+| ele **falou** (mensagem `assistant` cujo último bloco é texto) | **entregou** → encerra, e esse texto vira o relatório que o aviso nunca trouxe |
+| ele **pediu ferramenta** (`stop_reason: 'tool_use'`, ou último bloco é uma chamada) | estava no meio → **não decide nada** |
+| **não existe transcrito** dele | **não decide nada** — ler isso como "morreu" mataria o relógio de um agente vivo cujo arquivo ainda não apareceu |
+
+O `stop_reason` sozinho não servia: num transcrito real a última mensagem entregue vinha com
+o campo **ausente**. Por isso a decisão olha o que ele fez por último, com o `stop_reason` só
+como desempate a favor de "ainda trabalhando".
+
+**Aviso de fim significa que ele PAROU — qualquer que seja o status.** Está na própria nota
+do aviso: *"a task-notification fires each time this agent stops"*. Os status que aparecem
+de verdade nos transcritos desta máquina:
+
+| status | ocorrências | é fim? |
+| --- | --- | --- |
+| `completed` | 2443 | sim |
+| `failed` | 172 | sim |
+| `killed` | 168 | sim |
+| `stopped` | 20 | sim |
+
+O código tinha uma lista de status "terminais" (`completed`, `failed`) e tratava qualquer
+outro como **ainda de pé** — então 188 avisos de agente encerrado viravam relógio correndo,
+e um agente `killed` ficou 195 minutos na faixa do rodapé com o aviso de fim dele no
+arquivo. A regra virou o contrário: **parou, a menos que o aviso diga `running`**. Assim um
+status novo do CLI entra como fim, e não como mentira na tela. `killed`/`stopped` ganham
+chip de alerta — verde ali diria "deu certo".
 
 **Nem todo agente que termina tem aviso no arquivo.** Medido: o terminal deu uma frente
 como concluída (`Agent "Lane 2 colisão e tenant dos claims" finished · 15m 4s`) e **não
