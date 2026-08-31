@@ -324,11 +324,33 @@ describe('agente no histórico', () => {
     assert.equal(blocos(await ler(id), 'agent')[0].running, true);
   });
 
-  it('contador ausente (`null`) não decide nada', async () => {
+  // Medido num arquivo real de 110 fins de turno: todo turno que fechou com agente vivo
+  // trouxe o contador, e o CLI parou de escrevê-lo quando não havia mais nada de pé. Ler a
+  // ausência como "não sei" mantinha um agente de 25/08 com relógio correndo seis dias
+  // depois, enquanto o terminal não mostrava agente nenhum.
+  it('contador ausente depois de o arquivo já ter mostrado o campo = zero de pé', async () => {
     const id = await givenTranscript(
       fala('vai'),
       dispara('t1', 'Lane'),
-      { type: 'system', subtype: 'turn_duration', pendingBackgroundAgentCount: null },
+      { type: 'system', subtype: 'turn_duration', pendingBackgroundAgentCount: 1 },
+      fala('mais uma coisa'),
+      { type: 'system', subtype: 'turn_duration' },   // sem o campo: o CLI omite quando é 0
+    );
+    const agente = blocos(await ler(id), 'agent')[0];
+
+    assert.equal(agente.running, false);
+    assert.equal(agente.status, 'unknown');
+    assert.equal(agente.summary, 'sem aviso de fim');
+  });
+
+  // A trava contra a regressão oposta: sem prova de que aquele CLI escreve o campo, apagar
+  // o agente da tela seria a outra mentira — a de dizer que acabou quem está trabalhando.
+  it('arquivo que NUNCA mostrou o contador: ausência não decide nada', async () => {
+    const id = await givenTranscript(
+      fala('vai'),
+      dispara('t1', 'Lane'),
+      { type: 'system', subtype: 'turn_duration' },
+      { type: 'system', subtype: 'turn_duration', durationMs: 10 },
     );
 
     assert.equal(blocos(await ler(id), 'agent')[0].running, true);

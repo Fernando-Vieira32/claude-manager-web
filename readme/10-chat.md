@@ -480,7 +480,7 @@ que o CLI grava, medido num transcript de verdade:
 | `tool_use` `Agent` (ou `Task`) com `description`/`subagent_type` | no disparo | o agente **nasceu** |
 | `tool_result` "Async agent launched successfully… agentId: a96a…" | ~3 s depois | só o **aceite** do disparo — não é o trabalho. Mas é aqui que vem o **id estável** do agente |
 | `<task-notification>` numa entrada `user`, com `<tool-use-id>`, `<status>`, `<summary>`, `<result>` | quando ele para (minutos depois) | o agente **terminou**, e aqui está o relatório |
-| `pendingBackgroundAgentCount` no `system/turn_duration` | a cada turno | quantos ainda estão de pé |
+| `pendingBackgroundAgentCount` no `system/turn_duration` | a cada turno, **só quando é maior que zero** | quantos ainda estão de pé; **ausente = nenhum** |
 
 Daí três eventos separados no contrato (`agentStart`, `toolResult { ack }`, `agentEnd`) e
 o desenho da tela:
@@ -522,6 +522,21 @@ aviso do que o número diz, os **mais antigos** são encerrados como *"sem aviso
 (`status: 'unknown'`) até a conta fechar. O número é autoridade sobre a **quantidade**; a
 ordem "mais antigo primeiro" é a única defensável, porque um agente de uma sessão de ontem
 não sobrevive ao processo que o hospedava.
+
+**E o campo ausente conta como zero** — medido, não suposto. Num arquivo real de 110 fins
+de turno: os 4 que fecharam com agente vivo trouxeram o campo (`1`), nenhum turno com
+agente vivo veio sem ele, e depois que os agentes acabaram o CLI simplesmente **parou de
+escrever o campo** (mesma versão do CLI nos dois casos — ele omite quando é zero).
+
+Ler ausência como *"não sei"* era um bug com cara de fantasma: um agente disparado em 25/08
+seguia na faixa do rodapé com o relógio em **8678 min** seis dias depois, enquanto o
+terminal — o mesmo CLI, na mesma conversa, vivo — não mostrava agente nenhum. Quem
+percebeu foi o dono, justamente comparando as duas telas.
+
+**A trava contra a regressão oposta:** só concluímos zero por ausência se aquele arquivo já
+provou que o CLI que o escreveu usa o campo. Num `.jsonl` que nunca o traz, ausência volta a
+não decidir nada e quem está de pé continua de pé — apagar da tela um agente que está
+trabalhando seria a outra mentira.
 
 Duas tentativas erradas antes disso, e por que doeram:
 

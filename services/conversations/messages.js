@@ -69,12 +69,17 @@ function build(entries) {
   const porAgente = new Map();  // id ESTÁVEL do agente -> o bloco dele (é assim que o
                                 // aviso de fim o acha, mesmo depois de ele ser retomado)
   const abertos = [];        // agentes lançados e ainda sem aviso, em ordem de disparo
+  // Este arquivo já mostrou o contador alguma vez? É o que autoriza ler a AUSÊNCIA dele
+  // como zero (ver `conciliar`): sem essa prova, ausência continua não dizendo nada.
+  let viuContador = false;
 
   for (const e of entries) {
     // Quantos agentes o CLI ainda tem de pé. É o que permite não deixar um relógio
     // mentindo: agente sem aviso de fim no arquivo ficaria "rodando…" para sempre.
     if (e.type === 'system' && e.subtype === 'turn_duration') {
-      conciliar(abertos, e.pendingBackgroundAgentCount);
+      const pendentes = e.pendingBackgroundAgentCount;
+      if (typeof pendentes === 'number') viuContador = true;
+      conciliar(abertos, pendentes, viuContador);
       continue;
     }
     if (e.type !== 'user' && e.type !== 'assistant') continue;
@@ -127,11 +132,25 @@ function fechar(abertos, bloco) {
  *
  * Roda **em ordem cronológica**, a cada contador do arquivo: é o que faz o aviso que chega
  * depois do contador ser tratado na hora certa, em vez de ser julgado com o que só se sabe
- * no fim do arquivo. Contador ausente (`null`) não decide nada.
+ * no fim do arquivo.
+ *
+ * **Campo ausente significa ZERO** — e isso foi medido, não suposto. Numa conversa real de
+ * 110 fins de turno: os 4 que aconteceram com agente vivo trouxeram o campo (`1`), e
+ * nenhum turno com agente vivo veio sem ele; depois que os agentes acabaram, o CLI parou de
+ * escrever o campo (mesma versão do CLI nos dois casos — ele omite quando é zero). Ler
+ * ausência como "não sei" era o bug: um agente disparado em 25/08 seguia com relógio
+ * correndo seis dias depois, enquanto o terminal — o mesmo CLI, olhando a mesma conversa —
+ * não mostrava agente nenhum.
+ *
+ * A trava: só concluímos zero por ausência se ESTE arquivo já provou que o CLI que o
+ * escreveu usa o campo (`viuContador`). Num arquivo que nunca o traz — CLI antigo, ou
+ * gravação sem esse dado — ausência volta a não decidir nada, e quem está de pé continua
+ * de pé. Assim a correção não apaga da tela o agente que está trabalhando agora.
  */
-function conciliar(abertos, pendentes) {
-  if (typeof pendentes !== 'number') return;
-  while (abertos.length > pendentes) {
+function conciliar(abertos, pendentes, viuContador = false) {
+  if (typeof pendentes !== 'number' && !viuContador) return;
+  const teto = typeof pendentes === 'number' ? pendentes : 0;
+  while (abertos.length > teto) {
     const bloco = abertos.shift();
     Object.assign(bloco, { running: false, status: 'unknown', summary: 'sem aviso de fim' });
   }
