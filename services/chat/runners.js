@@ -32,6 +32,16 @@ export function createRunnerRegistry() {
     has: (conversationId) => runners.has(conversationId),
 
     /**
+     * O processo desta conversa está TRABALHANDO agora? (não é o mesmo que estar vivo: ele
+     * sobrevive ocioso por minutos depois da última resposta.)
+     *
+     * Duas decisões dependem disto: mostrar "respondendo"/oferecer o Parar, e calar o
+     * seguidor do `.jsonl` — quando o runner trabalha, ele já publica cada linha no canal,
+     * e seguir o arquivo duplicaria tudo.
+     */
+    working: (conversationId) => Boolean(runners.get(conversationId)?.working),
+
+    /**
      * O processo que serve esta conversa, se der para reaproveitá-lo. Modo e modelo são
      * flags de linha de comando, então formam a "assinatura": trocar de modo exige
      * processo novo.

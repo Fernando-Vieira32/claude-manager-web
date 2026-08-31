@@ -215,9 +215,19 @@ O que isso obriga a acertar, e por quê:
   Se essa marca fosse tirada no primeiro `tick`, tudo que o terminal escrevesse até lá
   seria engolido; e se fosse do começo, a janela mostraria a conversa duas vezes (ela já
   leu o histórico do disco ao abrir);
-- **pausa enquanto o processo é NOSSO.** Aí a resposta já sai pelo SSE do turno, e
-  publicar o arquivo também mostraria tudo em dobro. O cursor **anda mesmo pausado**:
-  sem isso, ao voltar, o histórico inteiro seria despejado de uma vez;
+- **pausa enquanto o nosso processo está TRABALHANDO** (`isRunning`, não `alive`). Aí a
+  resposta já sai pelo SSE do turno, e publicar o arquivo também mostraria tudo em dobro. O
+  cursor **anda mesmo pausado**: sem isso, ao voltar, o histórico inteiro seria despejado de
+  uma vez.
+
+  A pergunta era `alive`, e furava: o runner sobrevive **ocioso** por minutos depois da
+  última resposta (`CHAT_IDLE_MS`), e nesse período quem conduzia a conversa era o
+  **terminal**. As linhas do terminal caíam no cursor de um seguidor calado e eram puladas
+  para sempre. Medido numa conversa real: os avisos de fim de três agentes estavam no
+  arquivo (18:21:40, 18:24:09, 18:28:33, todos `completed`) e a faixa do rodapé seguia com
+  os quatro relógios correndo, enquanto o terminal já os mostrava terminados. Reabrir a
+  janela "consertava", porque aí a fonte é o disco. Ocioso não publica nada — então ocioso
+  não cala ninguém;
 - **lê só os bytes novos** (o transcript é append-only): seguir um arquivo de 2 MB custa
   um `stat` por segundo. Linha pela metade espera o `\n`; caractere partido entre duas
   leituras espera o resto (é `StringDecoder`, não `toString()` — senão a linha vira lixo e
