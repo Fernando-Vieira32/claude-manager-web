@@ -53,16 +53,11 @@ export function createChat({
   allowImages = true,
   pageSize = 20,
 } = {}) {
-  // Blocos lidos do disco que têm relógio vivo (cartão de agente ainda rodando). Quem
-  // criou destrói: recarregar o feed troca os nós, e timer de nó removido é vazamento.
-  let doDisco = [];
   // Instante do último envio cujo turno pode ainda não estar gravado no .jsonl. Enquanto
   // for > 0, recarregar o feed é perigoso: ver `waitTurnOnDisk` em core/response-end.js.
   let envioPendente = 0;
-  const soltarDoDisco = () => {
-    agentes.clear();                                        // a faixa é redesenhada com o feed
-    for (const item of doDisco.splice(0)) item.destroy?.();
-  };
+  // a faixa é redesenhada junto com o feed: quem está de pé vem na página (`onPage`)
+  const soltarDoDisco = () => agentes.clear();
 
   // o que o cartão de um agente chama ao ser aberto: buscar os passos dele e desenhá-los
   // ali dentro. Sem `fetchAgentSteps` o cartão simplesmente não oferece isso.
@@ -70,18 +65,7 @@ export function createChat({
 
   const feed = createFeed({
     fetchPage,
-    renderItem: (item) => renderMessage(item, {
-      onAgentOpen: passosDoAgente,
-      // cartão de agente lido do disco: o relógio é nosso para parar, e se ele ainda
-      // está rodando entra na faixa do rodapé como qualquer outro
-      keep: (card, block) => {
-        doDisco.push(card);
-        if (card.running) {
-          agentes.track({ id: block.id, name: block.name, agentType: block.agentType, card, startedAt: block.startedAt });
-        }
-      },
-      onToggle: () => feed.scrollToEnd(),
-    }),
+    renderItem: (item) => renderMessage(item, { onToggle: () => feed.scrollToEnd() }),
     // a faixa mostra quem o ARQUIVO diz estar de pé, mesmo que o disparo esteja 200
     // mensagens atrás — "quem está rodando" não pode depender de até onde você rolou
     onPage: (page) => { for (const a of page.agents || []) agentes.track(a); },

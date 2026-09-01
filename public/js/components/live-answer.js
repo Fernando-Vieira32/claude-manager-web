@@ -18,7 +18,6 @@
 
 import { streamBubble } from './bubble.js';
 import { createToolCall } from './tool-call.js';
-import { createAgentCard } from './agent-card.js';
 import { createStreamSink } from './stream-sink.js';
 
 /**
@@ -31,9 +30,14 @@ import { createStreamSink } from './stream-sink.js';
  *   guarda o cartão dele não pode ser esta resposta
  * @returns {{bubble:object, onEvent:Function, finish:Function, destroy:Function}}
  */
-export function createLiveAnswer({ feed, label = 'pensando…', onHint, agents, onAgentOpen } = {}) {
+export function createLiveAnswer({ feed, label = 'pensando…', onHint, agents } = {}) {
   const startedAt = Date.now();
-  const porId = new Map();     // id do tool_use -> { kind, call|card }
+  const porId = new Map();     // id do tool_use -> a chamada desenhada
+  // Ids que pertencem a um AGENTE (ele mesmo, e o que ele foi rodando). O que sai de dentro
+  // de um agente não entra na conversa: quem mostra isso é a faixa do rodapé, com o
+  // transcrito dele. Sem esta lista, as ferramentas do agente caíam soltas no feed — foi o
+  // que enfeiou a tela: dez linhas de `Bash cd /home/...` no meio do fio principal.
+  const dentroDeAgente = new Set();
   const vivos = [];            // tudo com timer/listener: destruir no fim
   const abertos = [];          // chamadas sem resultado: resolver no fim
   let bolha = null;            // a bolha viva; nasce quando faz falta
@@ -95,6 +99,10 @@ export function createLiveAnswer({ feed, label = 'pensando…', onHint, agents, 
     setError(message) { viva().setError(message); return surface; },
 
     addTool(name, { id, parentId, summary, input, inputTruncated, onToggle } = {}) {
+      if (parentId && dentroDeAgente.has(parentId)) {
+        if (id) dentroDeAgente.add(id);   // e os filhos DELE também ficam de fora
+        return surface;
+      }
       const call = createToolCall({ name, summary, input, inputTruncated, onToggle });
       call.node.classList.add('feed-block', 'feed-tool');
       if (id) porId.set(id, call);
@@ -109,15 +117,12 @@ export function createLiveAnswer({ feed, label = 'pensando…', onHint, agents, 
      * O trabalho dele não vem no resultado da ferramenta (aquilo é só o aceite do
      * disparo), então quem o encerra é o aviso de fim (`agentEnd`).
      */
-    addAgent({ id, name, agentType, model, parentId } = {}) {
-      const card = createAgentCard({
-        name, agentType, model, running: true, stepsRef: id || null, onOpen: onAgentOpen,
-      });
-      card.node.classList.add('feed-block', 'feed-agent');
-      if (id) porId.set(id, card);
-      vivos.push(card);
-      encaixar(card.node, parentId);
-      if (id) agents?.track({ id, name, agentType, card });
+    addAgent({ id, name, agentType } = {}) {
+      if (id) dentroDeAgente.add(id);
+      // O cartão NÃO vai para a conversa: ele existe só como registro (é por ele que o aviso
+      // de fim, que chega minutos depois, encontra quem encerrar) e o que a pessoa vê é a
+      // linha na faixa do rodapé. Ver o porquê em readme/10-chat.md.
+      if (id) agents?.track({ id, name, agentType, startedAt: Date.now() });
       return surface;
     },
 
@@ -128,14 +133,10 @@ export function createLiveAnswer({ feed, label = 'pensando…', onHint, agents, 
      * solto: melhor mostrar solto que jogar fora doze minutos de trabalho.
      */
     endAgent({ id, taskId, summary, result, status, durationMs } = {}) {
-      const fim = { summary, report: result, status, durationMs };
-      const meu = porId.get(id) || porId.get(taskId);
-      if (meu?.finish) {
-        meu.finish(fim);
-        agents?.end(id, fim, taskId);
-        return surface;
-      }
-      if (!agents?.end(id, fim, taskId)) empilhar(orfao({ summary, result, status, taskId }));
+      // Sai da faixa. Se ninguém conhece esse agente (ele começou antes desta tela), não há
+      // o que fazer na conversa: o relatório dele vira resposta do Claude principal, que é
+      // quem interpreta e fala com você — e isso chega pelo turno, não por aqui.
+      agents?.end(id, { summary, report: result, status, durationMs }, taskId);
       return surface;
     },
 
@@ -170,17 +171,6 @@ export function createLiveAnswer({ feed, label = 'pensando…', onHint, agents, 
       return surface;
     },
   };
-
-  /** Cartão de um agente que terminou sem termos visto nascer (janela aberta no meio). */
-  function orfao({ summary, result, status, taskId }) {
-    const card = createAgentCard({
-      name: summary || 'agente', running: false, report: result, status,
-      stepsRef: taskId || null, onOpen: onAgentOpen,
-    });
-    card.node.classList.add('feed-block', 'feed-agent');
-    vivos.push(card);
-    return card.node;
-  }
 
   const onEvent = createStreamSink({ bubble: surface, onHint, onScroll: rolar });
 

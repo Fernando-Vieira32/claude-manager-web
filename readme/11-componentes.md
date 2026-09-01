@@ -17,9 +17,8 @@ public/js/components/
   feed.js         lista paginada que cresce para cima (histórico, logs)
   bubble.js       bolha de mensagem estática e bolha de streaming (SÓ texto)
   message-items.js  quebra uma mensagem lida do disco nos blocos dela, na ordem
-  agent-card.js   um agente como bloco próprio (relógio vivo + relatório)
   agent-strip.js  os agentes em segundo plano da conversa (faixa do rodapé + registro)
-  agent-steps.js  os passos de um agente dentro do cartão dele (o que ele fez)
+  agent-steps.js  os passos de um agente (o que ele fez), dentro da linha da faixa
   composer.js     caixa de escrever com campos de opção e enviar/parar
   chat.js         feed + composer + envio = vista de conversa
   live-answer.js  uma resposta chegando: bolha viva + tradutor, já dentro do feed
@@ -131,7 +130,7 @@ trocar a bolha viva quando um bloco novo entra sem o tempo voltar a zero.
 ## `message-items.js`
 
 Uma mensagem **lida do disco** → os blocos dela na tela, na ordem em que aconteceram.
-Compõe [`bubble`](#bubblejs), [`tool-call`](#tool-calljs) e [`agent-card`](#agent-cardjs).
+Compõe [`bubble`](#bubblejs) e [`tool-call`](#tool-calljs).
 
 ```js
 const feed = createFeed({
@@ -145,59 +144,29 @@ const feed = createFeed({
 - devolve **uma lista de nós** (o feed achata) — um por bloco (`text`, `tool`, `agent`);
 - só o **primeiro** bloco leva o cabeçalho "quem falou · quando": repetir em cada bloco
   encheria a tela de etiquetas iguais;
-- `keep` recebe o que tem **timer** (cartão de agente ainda rodando) junto com o bloco de
-  origem. Quem monta destrói ao recarregar o feed — nó removido da tela com relógio vivo é
-  vazamento — e coloca o agente na faixa do rodapé;
+- **bloco de agente devolve `null`**: agente não entra na conversa (ver
+  [10 · Chat](10-chat.md#agentes-em-segundo-plano)). Por isso não há mais o `keep` de antes,
+  que existia para o cartão de agente com relógio vivo;
 - mensagem sem `blocks` (formato antigo, ou outro caminho) continua desenhando como texto.
 
-## `agent-card.js`
-
-Um **agente** como bloco próprio da conversa: nome, tipo, relógio vivo e o relatório
-quando ele volta.
-
-```js
-const card = createAgentCard({
-  name: 'Lane 1', agentType: 'general-purpose', startedAt,
-  stepsRef: block.id,          // por qual id se pedem os passos dele (o id do DISPARO)
-  onOpen: passosDoAgente,      // callback: busca e enche o cartão (ver agent-steps.js)
-});
-feed.append(card.node);
-card.open();                                       // abre e busca os passos
-card.addChild(toolCall.node);                      // um passo dele
-card.finish({ summary: 'terminou', report: '…', durationMs: 726000, status: 'completed' });
-card.running;                                      // ainda de pé?
-card.destroy();                                    // tem timer: sempre
-```
-
-Existe porque agente **não** é ferramenta comum: o `tool_result` dele volta em ~3 s com o
-aceite do disparo, e o trabalho chega minutos depois num aviso separado
-([10](10-chat.md#agentes-em-segundo-plano)). Desenhado como chip, ele aparecia
-**resolvido** enquanto seguia trabalhando por doze minutos — e escondido no pé de uma
-mensagem já terminada. Cria com `running: false` para um agente que já voltou (é o caso da
-leitura do disco); `startedAt` faz o relógio contar do disparo de verdade.
-
-**Abrir mostra o que ele fez.** Antes, abrir um agente rodando dava só "relatório:
-trabalhando…" — a queixa que gerou isto. Os passos dele vêm de um arquivo próprio
-([10](10-chat.md#agentes-em-segundo-plano)) e são buscados **na primeira abertura**, nunca
-antes: transcrito de agente passa de 800 KB, e pré-carregar isso para cada cartão da
-conversa seria absurdo. Falhou? A próxima abertura tenta de novo, e o motivo aparece no
-lugar dos passos. Sem `onOpen` o cartão simplesmente não oferece — nada quebra.
-
-Enquanto ele roda, o campo do relatório diz *"o relatório chega quando ele terminar"*, e
-não "trabalhando…": aquele texto sugeria que o campo ia se enchendo aos poucos, quando ele
-é escrito de uma vez, no fim.
+> **`agent-card.js` não existe mais.** Ele desenhava o agente como bloco da conversa, com
+> relógio e relatório. Foi removido em 31/08 pelo dono, olhando a tela: o mesmo agente
+> aparecia com relógio no feed **e** na faixa do rodapé. Hoje agente aparece só na faixa, e
+> quem interpreta o relatório na conversa é o Claude principal — o porquê está em
+> [10 · Chat](10-chat.md#agentes-em-segundo-plano). Se um dia o cartão voltar a fazer
+> sentido, ele volta como componente próprio; não reintroduza o desenho dentro do painel.
 
 ## `agent-steps.js`
 
-Os **passos** de um agente — o "o que ele está fazendo". Duas peças, porque isso aparece em
-**dois lugares** (o cartão na conversa e a linha da faixa do rodapé) e a lógica de "abre,
-busca uma vez, avisa se falhou" não pode ser escrita duas vezes:
+Os **passos** de um agente — o "o que ele está fazendo", dentro da linha da faixa. Duas
+peças: quem sabe **buscar e desenhar** os passos, e a **caixa** que abre e se enche. Separado
+assim porque a caixa é reaproveitável (foi usada no cartão da conversa enquanto ele existiu)
+e porque a lógica de "abre, busca uma vez, avisa se falhou" tem de ser escrita uma vez só:
 
 ```js
 const passos = createAgentSteps({ fetch: (ref) => api.conversations.agentSteps(id, ref) });
 
-createAgentCard({ ..., stepsRef: block.id, onOpen: passos });   // no feed
-createAgentStrip({ onExpand: passos });                         // no rodapé
+createAgentStrip({ onExpand: passos });   // a faixa hospeda a caixa em cada linha
 
 const caixa = createStepsBox({ ref, onOpen: passos });   // a caixa em si
 caixa.node;                  // vai onde você quiser
@@ -800,14 +769,15 @@ da bolha: ele é um bloco da conversa (`.feed-block`), como no terminal.
   `{ kind: 'tool', id, name, input, result }` da API e monta o chip já resolvido. Aqui
   **não** há `destroy()` — o listener do `tool-call` está no próprio nó dele, então morre
   quando o feed remove o bloco. Só o que escuta `document`/`window` ou usa timer precisa
-  de destruição explícita (é o caso do [`agent-card`](#agent-cardjs), que tem relógio).
+  de destruição explícita (é o caso do [`activity`](#activityjs), que tem relógio).
 
 Três decisões de honestidade (regra 8 do projeto):
 
 - enquanto não há retorno, o resultado diz **"executando…"** — não "vazio";
 - ao fim do stream, o que não voltou vira **"sem resultado registrado neste stream"** —
-  e o agente de segundo plano nem passa por aqui: ele tem cartão próprio, porque o retorno
-  da ferramenta dele é só o recibo de início ([`agent-card`](#agent-cardjs));
+  e o agente de segundo plano nem passa por aqui: ele vive na
+  [faixa do rodapé](#agent-stripjs), porque o retorno da ferramenta dele é só o recibo de
+  início — e o trabalho real fica no transcrito dele;
 - texto cortado no teto ganha a marca *"… cortado no limite de exibição"*, em vez de
   fingir que aquilo era o conteúdo inteiro.
 

@@ -495,17 +495,25 @@ que o CLI grava, medido num transcript de verdade:
 Daí três eventos separados no contrato (`agentStart`, `toolResult { ack }`, `agentEnd`) e
 o desenho da tela:
 
-- **cada agente é um bloco próprio** da conversa ([`agent-card`](11-componentes.md#agent-cardjs)),
-  com relógio vivo, e não um chip no pé de uma mensagem. Ele trabalha por dez, doze
-  minutos: desenhado como ferramenta, aparecia **resolvido em 3 s** (pelo aceite) e
-  enterrado dentro de uma bolha já terminada;
+- **agente NÃO aparece na conversa.** Nem rodando, nem terminado, e nem as ferramentas que
+  ele roda por dentro. A conversa é o fio principal: quando o agente volta, quem interpreta
+  o relatório e fala com você é o Claude principal — e isso já chega como resposta dele.
+  ([`message-items`](11-componentes.md#message-itemsjs) devolve `null` para bloco de agente.)
+
+  Duas versões erradas antes, e a segunda foi o dono quem barrou olhando a tela: primeiro o
+  agente era um chip no pé da mensagem (aparecia **resolvido em 3 s**, pelo aceite do
+  disparo, enquanto seguia trabalhando doze minutos); depois virou um cartão próprio no
+  feed — e aí o **mesmo** agente aparecia com relógio em dois lugares, no feed e na faixa.
+  *"Só aqui precisa"*, com a seta apontando para a faixa. O cartão foi removido junto com o
+  componente `agent-card.js`;
 - **quem está de pé aparece no rodapé**, acima da caixa de escrever
-  ([`agent-strip`](11-componentes.md#agent-stripjs)) — é o painel fixo que o terminal tem.
-  Sem isso, saber se o agente ainda vive exigia rolar o feed para trás;
-- **o cartão é da CONVERSA, não do turno.** O disparo acontece num turno e o aviso de fim
-  chega em outro (ou em nenhum), então o registro `id → cartão` vive no nível da conversa.
-  Com um registro por resposta, o relatório caía numa resposta que nunca viu o disparo: o
-  cartão original ficava "rodando…" para sempre e o relatório aparecia duplicado;
+  ([`agent-strip`](11-componentes.md#agent-stripjs)) — é o painel fixo que o terminal tem, e
+  agora é o **único** lugar onde o agente aparece. Clicar na linha abre ali mesmo o que ele
+  está fazendo;
+- **o registro é da CONVERSA, não do turno.** O disparo acontece num turno e o aviso de fim
+  chega em outro (ou em nenhum), então o `id → agente` vive no nível da conversa. Com um
+  registro por resposta, o aviso caía numa resposta que nunca viu o disparo, e a linha ficava
+  na faixa com o relógio correndo para sempre;
 - **o aviso de fim não abre turno.** Ele chega sozinho; deixá-lo abrir uma bolha viva
   acenderia um indicador que nada iria apagar;
 - **o casamento é pelo id ESTÁVEL do agente** (`agentId` do aceite = `<task-id>` do aviso),

@@ -6,27 +6,21 @@
 // mensagem já terminada.
 //
 // Burro: recebe a mensagem (como o serviço a devolve) e callbacks, devolve NÓS. Compõe
-// `bubble`, `tool-call` e `agent-card` — não conhece api, rota nem painel.
+// `bubble` e `tool-call` — não conhece api, rota nem painel. **Agente não entra aqui**: ele
+// vive na faixa do rodapé (ver o comentário em `render`).
 //
 //   feed = createFeed({ renderItem: (m) => messageItems(m, { onToggle }) })
 
 import { messageBubble } from './bubble.js';
 import { createToolCall } from './tool-call.js';
-import { createAgentCard } from './agent-card.js';
 
 /**
  * @param {{role:string, at?:string, blocks?:Array<object>, badge?:string}} msg
  * @param {object} [opts]
  * @param {Function} [opts.onToggle] avisa quando um bloco abre/fecha (reajuste de scroll)
- * @param {(card:object, block:object) => void} [opts.keep] recebe o que tem TIMER (cartão
- *   de agente ainda rodando) e o bloco de origem, para quem monta poder destruí-lo ao
- *   recarregar o feed — nó removido da tela com relógio vivo é vazamento — e colocá-lo na
- *   faixa de "rodando agora"
- * @param {(ref:string, card:object) => Promise<number>} [opts.onAgentOpen] busca os
- *   passos de um agente quando o cartão dele é aberto (ver `agent-steps.js`)
  * @returns {Array<Node>} um nó por bloco — o feed achata a lista
  */
-export function messageItems(msg = {}, { onToggle, keep, onAgentOpen } = {}) {
+export function messageItems(msg = {}, { onToggle } = {}) {
   const { role = 'assistant', at, badge, blocks } = msg;
   // mensagem antiga (ou de outro caminho) sem blocos: continua desenhando como texto
   if (!Array.isArray(blocks)) return [messageBubble(msg)];
@@ -34,7 +28,7 @@ export function messageItems(msg = {}, { onToggle, keep, onAgentOpen } = {}) {
   let primeiro = true;
   const nodes = [];
   for (const block of blocks) {
-    const node = render(block, { role, at: primeiro ? at : null, badge, onToggle, keep, onAgentOpen });
+    const node = render(block, { role, at: primeiro ? at : null, badge, onToggle });
     if (!node) continue;
     nodes.push(node);
     primeiro = false;    // só o primeiro bloco leva o cabeçalho com quem falou e quando
@@ -42,7 +36,7 @@ export function messageItems(msg = {}, { onToggle, keep, onAgentOpen } = {}) {
   return nodes;
 }
 
-function render(block, { role, at, badge, onToggle, keep, onAgentOpen }) {
+function render(block, { role, at, badge, onToggle }) {
   if (block?.kind === 'text') {
     return messageBubble({ role, text: block.text, at, badge });
   }
@@ -53,26 +47,13 @@ function render(block, { role, at, badge, onToggle, keep, onAgentOpen }) {
     else call.settle();
     return bloco('tool', call.node);
   }
-  if (block?.kind === 'agent') {
-    const card = createAgentCard({
-      name: block.name,
-      agentType: block.agentType,
-      model: block.model,
-      running: Boolean(block.running),
-      summary: block.summary || '',
-      report: block.report || '',
-      durationMs: block.durationMs ?? null,
-      startedAt: block.startedAt || null,
-      status: block.status || 'completed',
-      onToggle,
-      // o id do disparo é a chave dos passos dele (o servidor traduz para o arquivo)
-      stepsRef: block.id || null,
-      onOpen: onAgentOpen,
-    });
-    // rodando = relógio vivo: quem montou precisa poder pará-lo
-    if (card.running) keep?.(card, block);
-    return bloco('agent', card.node);
-  }
+  // AGENTE NÃO ENTRA NA CONVERSA — nem rodando, nem terminado.
+  //
+  // Decisão do dono em 31/08, olhando a tela: o mesmo agente aparecia com relógio no feed E
+  // na faixa do rodapé. A conversa é o fio principal; quando o agente volta, quem interpreta
+  // o relatório e responde ali é o Claude principal. O agente vive na faixa
+  // (`agent-strip`), que abre e mostra os passos dele. Antes daqui saía um cartão por agente
+  // — o porquê da mudança está em readme/10-chat.md.
   return null;
 }
 

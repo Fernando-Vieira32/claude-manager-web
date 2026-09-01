@@ -388,25 +388,11 @@ table.grid tr.accent td:first-child { box-shadow: inset 3px 0 0 var(--row-accent
 .feed-block { margin-left: 14px; }
 .feed-block.feed-tool { padding: 2px 0; }
 
-/* ---------------------------------------- componente agent-card (agente) */
-.agent-card {
-  display: grid; gap: 6px; padding: 8px 12px;
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--line);
-  border-left: 3px solid color-mix(in srgb, var(--accent) 55%, var(--line));
-  background: color-mix(in srgb, var(--surface) 70%, transparent);
-}
-.agent-card.running { border-left-color: var(--accent); }
-.agent-card.failed { border-left-color: var(--danger); }
-.agent-head {
-  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
-  border: 0; background: none; color: var(--text);
-  padding: 0; cursor: pointer; text-align: left; font: inherit;
-}
-.agent-name { font-family: var(--mono); font-size: 12.5px; }
+/* -------------------------------- peças de agente (só na faixa do rodapé) */
+/* O cartão de agente na conversa foi REMOVIDO em 31/08: o mesmo agente aparecia com
+   relógio no feed e na faixa. Agente vive na faixa; a conversa é o fio principal. */
 .agent-caret { color: var(--text-faint); }
-.agent-type, .agent-model { background: var(--surface-2); color: var(--text-dim); }
-.agent-detail { display: grid; gap: 8px; min-width: 0; }
+.agent-type { background: var(--surface-2); color: var(--text-dim); }
 .agent-kids { display: grid; gap: 6px; }
 /* Os passos do agente são as MESMAS peças da conversa (bolha, chamada de ferramenta), só
    dentro do cartão dele — então aqui só se ajusta o encaixe, nunca o desenho delas. */
