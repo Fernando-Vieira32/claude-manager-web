@@ -136,6 +136,7 @@ states.error(err, () => load())  // mensagem + botão "Tentar de novo"
 | `toolbar-line` | linha de contexto acima da lista (contagem, switches) |
 | `switch` | rótulo + checkbox (ex.: "atualizar a cada 5s") |
 | `msg`, `msg user`, `msg assistant` | bolhas de conversa no drawer |
+| `md-*` | o markdown da resposta do Claude: `md-body` (o corpo), `md-p`, `md-h`+`md-h1…6`, `md-list`/`md-item`, `md-quote`, `md-rule`, `md-table`, `md-code`/`md-code-inline`, `md-link` (`.off` = link que não abre) |
 | `ctx-*` | medidor de contexto (rótulo, barra, alerta) |
 | `skeleton`, `state` | carregando e estados vazios |
 

@@ -480,6 +480,14 @@ Os eventos que **não** pertencem a um turno nosso (`hello`, `autoStart`, `autoE
 `busy`, `gone`, mais os normais do turno espontâneo) chegam pelo
 [canal da conversa](#o-canal-da-conversa), não por este stream.
 
+O `delta` e o `message` vêm **em markdown** — é como o Claude escreve. Nem o serviço nem o
+canal formatam nada: o texto atravessa cru, e quem traduz para a tela é o componente
+[`markdown-text`](11-componentes.md#markdown-textjs), no navegador. Foi decisão, não
+acidente: o texto chega em centenas de pedacinhos (o back nunca tem a mensagem inteira
+para formatar), e mandar HTML pronto pelo fio obrigaria o navegador a usar `innerHTML` em
+texto gerado por modelo. **Só a resposta do Claude é formatada** — o que você digitou
+aparece como digitado.
+
 ### Agentes em segundo plano
 
 Um agente **não** é uma ferramenta comum, e tratá-lo como tal produzia a tela errada. O

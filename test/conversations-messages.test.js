@@ -40,6 +40,36 @@ const ler = async (id) => (await repo.getConversation(id, { limit: 50 })).messag
 const blocos = (msgs, kind) => msgs.flatMap((m) => m.blocks).filter((b) => b.kind === kind);
 const textos = (msgs) => blocos(msgs, 'text').map((b) => b.text);
 
+// A saída de `/context` (e de `/cost`) é gravada como turno do USUÁRIO, mas quem a escreveu
+// foi o CLI — e em markdown. Medido em transcript de verdade: `isMeta: true`, sem `origin`.
+// A tela usa esse `fromCli` para formatar sem quebrar a promessa "o que você digitou aparece
+// como digitado" (ver 11-componentes.md#bubblejs).
+describe('mensagem que o CLI escreveu no turno do usuário', () => {
+  const doCli = (text) => ({ type: 'user', isMeta: true, message: { content: [{ type: 'text', text }] } });
+
+  it('vem marcada como `fromCli`', async () => {
+    const id = await givenTranscript(doCli('## Context Usage\n\n**Tokens:** 969.6k'));
+
+    assert.equal((await ler(id))[0].fromCli, true);
+  });
+
+  it('e o que você digitou NÃO vem marcado', async () => {
+    const id = await givenTranscript(fala('**isto** eu digitei'));
+
+    assert.equal((await ler(id))[0].fromCli, false);
+  });
+
+  it('a resposta do Claude também não é `fromCli` (ela já é formatada pelo papel)', async () => {
+    const id = await givenTranscript(
+      fala('oi'),
+      { type: 'assistant', message: { content: [{ type: 'text', text: 'olá' }] } },
+    );
+    const claude = (await ler(id)).find((m) => m.role === 'assistant');
+
+    assert.equal(claude.fromCli, false);
+  });
+});
+
 describe('ferramentas no histórico', () => {
   it('a mensagem carrega a ferramenta com pedido', async () => {
     const id = await givenTranscript(fala('rode ls'), usa('t1', 'Bash', { command: 'ls -la' }));

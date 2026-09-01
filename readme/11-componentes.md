@@ -16,6 +16,7 @@ serviço, rota nem painel: recebe dados e callbacks, devolve nó.
 public/js/components/
   feed.js         lista paginada que cresce para cima (histórico, logs)
   bubble.js       bolha de mensagem estática e bolha de streaming (SÓ texto)
+  markdown-text.js  o markdown da resposta do Claude virando nós (o corpo da bolha)
   message-items.js  quebra uma mensagem lida do disco nos blocos dela, na ordem
   agent-strip.js  os agentes em segundo plano da conversa (faixa do rodapé + registro)
   agent-steps.js  os passos de um agente (o que ele fez), dentro da linha da faixa
@@ -126,6 +127,67 @@ b.empty;                       // não escreveu nada? (aí ela sai do feed em ve
 Quem consome um stream nunca toca no DOM: só chama esses métodos. `startedAt` faz o
 relógio contar do começo do TURNO, e não do nascimento desta bolha — é o que permite
 trocar a bolha viva quando um bloco novo entra sem o tempo voltar a zero.
+
+### O corpo da bolha: markdown para o Claude, texto cru para você
+
+O Claude **responde em markdown**. A bolha mostrava a resposta crua, e o que se lia era
+`**Criados — o mecanismo**`, ``` solto e `|---|` no meio da conversa. Hoje as duas bolhas
+pedem o corpo à mesma função interna (`bodyOf`), e a decisão é **de quem escreveu** — não
+do formato do texto (adivinhar "isto parece markdown" erraria com quem digita `#` ou `|`):
+
+| Mensagem | corpo | por quê |
+| --- | --- | --- |
+| `role: 'assistant'` | [`markdown-text`](#markdown-textjs) | é markdown de verdade; formatar é trabalho da tela, não de quem lê |
+| `role: 'user'` ou `'system'` | `<pre>` com o texto | **o que você digitou aparece como digitado**: se você mandou `**` literal ou uma linha começando com `-`, reformatar mudaria a sua mensagem na tela |
+| `fromCli: true` (qualquer papel) | [`markdown-text`](#markdown-textjs) | a saída de `/context` e `/cost` é gravada como turno do **usuário**, mas quem escreveu foi o CLI — e em markdown. Quem prova isso é o serviço (`isMeta` do transcript, ver [03 · API](03-api.md#conversas)), não um palpite pelo formato do texto |
+
+A bolha viva repassa cada `append` para o corpo (`setText`), e o `finish()` chama
+`flush()` — terminar com o último pedaço ainda não desenhado seria o bug da "resposta
+apagada" por outro caminho.
+
+## `markdown-text.js`
+
+Markdown → nós na tela. É o corpo de uma resposta do Claude.
+
+```js
+const corpo = createMarkdownText({ text: msg.text });
+bolha.append(corpo.node);
+corpo.setText(buffer);   // stream: redesenha no PRÓXIMO QUADRO (coalescido)
+corpo.flush();           // fim do turno: desenha agora
+corpo.destroy();         // cancela o quadro pendente
+```
+
+- a **gramática** não mora aqui: está em `public/js/core/markdown.js` (+
+  `markdown-inline.js`), que é regra **pura** e tem teste na suíte
+  ([13 · Testes](13-testes.md#o-que-está-coberto)). Este arquivo só desenha;
+- **nada de `innerHTML`.** O texto vem de fora (o Claude escreve, e o que ele leu pode ter
+  vindo de qualquer arquivo): montamos elemento por elemento, então uma `<img onerror>` no
+  meio da resposta é **texto**, não execução;
+- link só é link com `http(s)`/`mailto`. `javascript:` vira texto riscado
+  (`.md-link.off`), porque clicar nele seria executar o que a resposta pediu;
+- `setText` **espera o próximo quadro** de propósito: uma resposta chega em centenas de
+  `text_delta`, e redesenhar em cada um é trabalho jogado fora (o navegador pinta uma vez
+  por quadro de todo jeito). Medido no arnês: 2 deltas → 1 quadro agendado;
+- `destroy()` é obrigatório porque existe quadro agendado — a bolha pode sair da tela com
+  um pendente (drawer fechado no meio da resposta).
+
+**Zero biblioteca.** Nem `marked` nem `markdown-it`: o projeto não tem dependência e não
+tem build, e o caminho comum dessas libs (`parse()` → `innerHTML`) pediria um sanitizador
+atrás. O subconjunto coberto é o que o Claude escreve de fato — título, parágrafo, cerca de
+código (com a linguagem), lista aninhada, citação, régua, tabela, e, na linha, negrito,
+itálico, `código`, riscado e link. HTML embutido, nota de rodapé e link de referência ficam
+como texto: é honesto e mantém o parser pequeno.
+
+Duas armadilhas que o teste trava, porque as duas apareceriam todo dia neste projeto:
+
+- **`_` dentro de palavra não é itálico.** `built_in_copy_spec.rb` e
+  `eco_confirm_outcome.rb` perderiam os underscores e ganhariam itálico no meio;
+- **`|` não faz tabela.** `ps aux | grep node` é comando; o que define tabela é a linha
+  separadora (`|---|`) logo abaixo do cabeçalho.
+
+E uma decisão de streaming: **cerca de código aberta vale até o fim do texto**. Enquanto a
+resposta chega, o ``` de fechamento ainda não existe — tratar como parágrafo faria o bloco
+piscar entre dois desenhos a cada pedaço que chega.
 
 ## `message-items.js`
 

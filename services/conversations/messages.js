@@ -105,6 +105,11 @@ function build(entries) {
       role: e.type,
       at: e.timestamp || null,
       human: e.origin?.kind === 'human',
+      // O CLI escreveu isto e pôs no turno do usuário — é a saída de um comando local
+      // (`/context`, `/cost`), não fala de ninguém. Vem em markdown, então a tela pode
+      // formatar: a regra "o que você digitou aparece como digitado" continua valendo,
+      // porque aqui a prova é POSITIVA (o campo existe), não a ausência de outro campo.
+      fromCli: e.isMeta === true,
       // `end_turn` = ele parou de falar; `tool_use` = está esperando uma ferramenta. É o que
       // permite saber se um subagente ENTREGOU a resposta (ver subagent.js#settleOpenAgents)
       stopReason: e.message?.stop_reason || null,

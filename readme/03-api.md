@@ -178,11 +178,11 @@ curl -s "localhost:7788/api/conversations/$ID?limit=5&before=5"
   ],
   "messages": [
     {
-      "index": 90, "role": "user", "at": "2026-…", "human": true,
+      "index": 90, "role": "user", "at": "2026-…", "human": true, "fromCli": false,
       "blocks": [{ "kind": "text", "text": "solte as três frentes" }]
     },
     {
-      "index": 91, "role": "assistant", "at": "2026-…", "human": false,
+      "index": 91, "role": "assistant", "at": "2026-…", "human": false, "fromCli": false,
       "blocks": [
         { "kind": "text", "text": "Vou escrever o contrato antes de despachar:" },
         {
@@ -211,6 +211,20 @@ curl -s "localhost:7788/api/conversations/$ID?limit=5&before=5"
 | --- | --- |
 | `text` | prosa. É o que vai na caixa de mensagem — e **só** isso |
 | `tool` | uma chamada de ferramenta: `input` (o pedido, já em texto), `result` (o que voltou, ou `null` se ainda não voltou), `summary` (a frase curta do chip) |
+
+Cada mensagem traz também **quem escreveu**, e os dois campos respondem coisas diferentes:
+
+- `human: true` — a pessoa digitou (o transcript marca `origin.kind === 'human'`). É o que
+  escolhe o `title` da conversa;
+- `fromCli: true` — o **CLI** escreveu e gravou no turno do usuário: é a saída de um comando
+  local (`/context`, `/cost`) ou um prompt que ele injetou (`isMeta` no transcript). Vem em
+  **markdown**, e é por isso que a tela o formata mesmo com `role: 'user'` — sem isso, a
+  saída do `/context` aparecia com `##` e `|---|` na cara (ver
+  [11 · Componentes](11-componentes.md#o-corpo-da-bolha-markdown-para-o-claude-texto-cru-para-você)).
+
+Uma mensagem digitada tem `human: true, fromCli: false`; a resposta do Claude, os dois
+`false` (ela é formatada pelo papel, não por marca).
+
 ### Os passos de um subagente
 
 O trabalho de um agente **não está** no arquivo da conversa — medido: zero entradas de

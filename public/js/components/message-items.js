@@ -21,14 +21,14 @@ import { createToolCall } from './tool-call.js';
  * @returns {Array<Node>} um nó por bloco — o feed achata a lista
  */
 export function messageItems(msg = {}, { onToggle } = {}) {
-  const { role = 'assistant', at, badge, blocks } = msg;
+  const { role = 'assistant', at, badge, blocks, fromCli } = msg;
   // mensagem antiga (ou de outro caminho) sem blocos: continua desenhando como texto
   if (!Array.isArray(blocks)) return [messageBubble(msg)];
 
   let primeiro = true;
   const nodes = [];
   for (const block of blocks) {
-    const node = render(block, { role, at: primeiro ? at : null, badge, onToggle });
+    const node = render(block, { role, at: primeiro ? at : null, badge, fromCli, onToggle });
     if (!node) continue;
     nodes.push(node);
     primeiro = false;    // só o primeiro bloco leva o cabeçalho com quem falou e quando
@@ -36,9 +36,11 @@ export function messageItems(msg = {}, { onToggle } = {}) {
   return nodes;
 }
 
-function render(block, { role, at, badge, onToggle }) {
+function render(block, { role, at, badge, fromCli, onToggle }) {
   if (block?.kind === 'text') {
-    return messageBubble({ role, text: block.text, at, badge });
+    // `fromCli` = o CLI escreveu (saída de `/context` e afins). Vai como markdown mesmo com
+    // `role: 'user'` — é o serviço que prova isso, não o desenho.
+    return messageBubble({ role, text: block.text, at, badge, fromCli });
   }
   if (block?.kind === 'tool') {
     const call = createToolCall({ ...block, onToggle });
