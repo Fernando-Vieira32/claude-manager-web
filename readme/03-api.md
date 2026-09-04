@@ -112,6 +112,7 @@ curl -s -X POST localhost:7788/api/sessions/30498/kill \
 | --- | --- | --- |
 | GET | `/api/conversations?q=` | lista as transcrições |
 | GET | `/api/conversations/:id?limit=20&before=` | janela de mensagens (leitura paginada) |
+| GET | `/api/conversations/:id/agents/:ref?limit=400` | **os passos de um subagente**: o que ele fez, em blocos |
 | POST | `/api/conversations/:id/rename` | renomeia (`{ "name": "..." }`) — o mesmo que `/rename` |
 | DELETE | `/api/conversations/:id` | move para a lixeira |
 | GET | `/api/conversations/trash` | lista a lixeira |
@@ -177,11 +178,11 @@ curl -s "localhost:7788/api/conversations/$ID?limit=5&before=5"
   ],
   "messages": [
     {
-      "index": 90, "role": "user", "at": "2026-…", "human": true,
+      "index": 90, "role": "user", "at": "2026-…", "human": true, "fromCli": false,
       "blocks": [{ "kind": "text", "text": "solte as três frentes" }]
     },
     {
-      "index": 91, "role": "assistant", "at": "2026-…", "human": false,
+      "index": 91, "role": "assistant", "at": "2026-…", "human": false, "fromCli": false,
       "blocks": [
         { "kind": "text", "text": "Vou escrever o contrato antes de despachar:" },
         {
@@ -210,7 +211,44 @@ curl -s "localhost:7788/api/conversations/$ID?limit=5&before=5"
 | --- | --- |
 | `text` | prosa. É o que vai na caixa de mensagem — e **só** isso |
 | `tool` | uma chamada de ferramenta: `input` (o pedido, já em texto), `result` (o que voltou, ou `null` se ainda não voltou), `summary` (a frase curta do chip) |
-| `agent` | um subagente: `name` é o que ele foi fazer, `running` diz se ainda está de pé, `report`/`summary` é o que ele devolveu, `durationMs` quanto levou e `status` como terminou (`completed`, `failed` ou **`unknown`** = sem aviso de fim no arquivo) |
+
+Cada mensagem traz também **quem escreveu**, e os dois campos respondem coisas diferentes:
+
+- `human: true` — a pessoa digitou (o transcript marca `origin.kind === 'human'`). É o que
+  escolhe o `title` da conversa;
+- `fromCli: true` — o **CLI** escreveu e gravou no turno do usuário: é a saída de um comando
+  local (`/context`, `/cost`) ou um prompt que ele injetou (`isMeta` no transcript). Vem em
+  **markdown**, e é por isso que a tela o formata mesmo com `role: 'user'` — sem isso, a
+  saída do `/context` aparecia com `##` e `|---|` na cara (ver
+  [11 · Componentes](11-componentes.md#o-corpo-da-bolha-markdown-para-o-claude-texto-cru-para-você)).
+
+Uma mensagem digitada tem `human: true, fromCli: false`; a resposta do Claude, os dois
+`false` (ela é formatada pelo papel, não por marca).
+
+### Os passos de um subagente
+
+O trabalho de um agente **não está** no arquivo da conversa — medido: zero entradas de
+sidechain em 923 transcritos. O CLI grava cada subagente num arquivo próprio, ao lado:
+`~/.claude/projects/<projeto>/<sessão>/subagents/agent-<agentId>.jsonl`, no mesmo formato.
+Por isso a rota devolve **os mesmos blocos** de uma conversa, e a tela os desenha com os
+mesmos componentes.
+
+```bash
+# `:ref` é o id do DISPARO (o `id` do bloco `agent`) — o servidor traduz para o arquivo
+curl -s "localhost:7788/api/conversations/$ID/agents/toolu_013TJf…?limit=5"
+# { "ref": "toolu_013TJf…",
+#   "meta": { "agentType": "general-purpose", "description": "Por que o /resume não lista", "model": "opus" },
+#   "lastActivityAt": "2026-08-25T14:48:44.984Z",   ← última vez que ele escreveu algo
+#   "total": 37, "from": 32,                        ← veio cortado: mostra os últimos 5
+#   "messages": [ { "role": "assistant", "blocks": [ … ] } ] }
+```
+
+O **id estável** do agente nunca vai para a tela (o próprio CLI pede isso), então o pedido
+é pelo id do disparo e a tradução acontece no servidor, pelo `toolUseId` que está no
+`.meta.json` de cada agente. Agente cujo arquivo o CLI já limpou responde **404** com
+"os passos deste agente não estão mais no disco" — e não um 404 genérico de conversa.
+
+| `agent` | um subagente: `name` é o que ele foi fazer, `running` diz se ainda está de pé, `report`/`summary` é o que ele devolveu, `durationMs` quanto levou e `status` como terminou (`completed`, `failed`, `killed`, `stopped` — ou **`unknown`** = sem aviso de fim no arquivo). **Aviso de fim = parou**, qualquer status: só `running` mantém de pé. Sem aviso, quem julga é o transcrito do próprio agente — daí `summary: 'terminou (sem aviso no arquivo)'` com o relatório tirado da última fala dele |
 
 Por que blocos, e não `text` + `tools` como antes: empilhar as ferramentas no pé da
 mensagem embrulhava numa caixa o que o terminal mostra separado, **trocava a ordem** (a

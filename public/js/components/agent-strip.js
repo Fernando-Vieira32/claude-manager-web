@@ -8,24 +8,27 @@
 //
 // Burra: recebe dados/callbacks, compõe `activity` (relógio vivo) e some quando vazia.
 //
-//   const agentes = createAgentStrip({ onPick: () => feed.scrollToEnd() });
+//   const agentes = createAgentStrip({ onExpand: passosDoAgente });
 //   agentes.track({ id, name, agentType, card });   // entrou: faixa + registro
 //   agentes.end(id, { summary, result, status });    // voltou: encerra o cartão e sai
 //   agentes.destroy();                               // tem timer: sempre
 
 import { el } from '../core/ui.js';
 import { createActivity } from './activity.js';
+import { createStepsBox } from './agent-steps.js';
 
 /**
  * @param {object} [opts]
- * @param {(id:string) => void} [opts.onPick] clique numa linha (ex.: rolar até o cartão)
+ * @param {(id:string, alvo:{addChild:Function}) => Promise<number>} [opts.onExpand] clicar
+ *   numa linha ABRE ali mesmo o que o agente está fazendo: a faixa entrega um alvo com
+ *   `addChild(nó)` e quem chamou o enche (ver `agent-steps.js`). Sem isto a linha não abre
  */
-export function createAgentStrip({ onPick } = {}) {
+export function createAgentStrip({ onExpand } = {}) {
   const titulo = el('span', { class: 'agents-title' }, '');
   const lista = el('div', { class: 'agents-list' });
   const node = el('div', { class: 'agents-strip', hidden: true }, titulo, lista);
 
-  const vivos = new Map();   // id do disparo -> { row, activity, card }
+  const vivos = new Map();   // id do disparo -> { item, activity, card }
   const porAgente = new Map();  // id ESTÁVEL do agente -> id do disparo
 
   const pintar = () => {
@@ -39,7 +42,7 @@ export function createAgentStrip({ onPick } = {}) {
     const item = vivos.get(id);
     if (!item) return false;
     item.activity.destroy();
-    item.row.remove();
+    item.linha.destroy();
     if (destruir) item.card?.destroy?.();
     vivos.delete(id);
     pintar();
@@ -77,14 +80,10 @@ export function createAgentStrip({ onPick } = {}) {
         return api;
       }
       const activity = createActivity({ label: '', startedAt: emMs(startedAt) });
-      const row = el('button', { class: 'agents-row', type: 'button', title: name },
-        el('span', { class: 'agents-name' }, name),
-        agentType ? el('span', { class: 'chip agent-type' }, agentType) : null,
-        activity.node);
-      if (onPick) row.addEventListener('click', () => onPick(id));
+      const item = linha({ id, name, agentType, activity, onExpand });
       activity.start();
-      lista.append(row);
-      vivos.set(id, { row, activity, card });
+      lista.append(item.node);
+      vivos.set(id, { linha: item, activity, card });
       pintar();
       return api;
     },
@@ -124,4 +123,45 @@ function emMs(valor) {
   if (!valor) return null;
   const ms = typeof valor === 'number' ? valor : Date.parse(valor);
   return Number.isFinite(ms) ? ms : null;
+}
+
+/**
+ * Uma linha da faixa: cabeçalho clicável + o que ele está fazendo, ali mesmo.
+ *
+ * Abrir **na faixa** foi pedido depois de eu ter feito errado: a primeira versão rolava a
+ * conversa até o cartão do agente. Quem está olhando o rodapé quer ver o agente sem sair de
+ * onde está — é o que o terminal faz. A caixa dos passos é a mesma peça do cartão
+ * (`agent-steps.js`): uma lógica de "abre e busca uma vez", não duas.
+ */
+function linha({ id, name, agentType, activity, onExpand }) {
+  const caret = el('span', { class: 'agent-caret' }, '▸');
+  const passos = createStepsBox({ ref: id, onOpen: onExpand, label: 'o que ele está fazendo' });
+  const row = el('button', {
+    class: 'agents-row', type: 'button', title: name, 'aria-expanded': 'false',
+  }, onExpand ? caret : null,
+    el('span', { class: 'agents-name' }, name),
+    agentType ? el('span', { class: 'chip agent-type' }, agentType) : null,
+    activity.node);
+  const detalhe = el('div', { class: 'agents-detail', hidden: true }, passos.node);
+  const node = el('div', { class: 'agents-item' }, row, detalhe);
+
+  const alterna = () => {
+    const aberto = detalhe.hidden;
+    detalhe.hidden = !aberto;
+    node.classList.toggle('open', aberto);
+    row.setAttribute('aria-expanded', String(aberto));
+    caret.textContent = aberto ? '▾' : '▸';
+    if (aberto) passos.load();
+  };
+  if (onExpand) row.addEventListener('click', alterna);
+
+  return {
+    node,
+    /** Um passo que chegou AO VIVO (pelo stream), sem esperar abertura. */
+    addChild: (child) => passos.addChild(child),
+    destroy() {
+      row.removeEventListener('click', alterna);
+      node.remove();
+    },
+  };
 }

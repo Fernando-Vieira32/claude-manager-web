@@ -32,7 +32,7 @@ const oneshots = new Map();
  * no exato momento em que ele era necessário.
  */
 export function isRunning(id) {
-  return Boolean(runners.get(id)?.working) || oneshots.has(id);
+  return runners.working(id) || oneshots.has(id);
 }
 
 export function listRunning() {
@@ -83,7 +83,13 @@ export function watchTranscript(id) {
   const { file } = resolveConversationId(id);
   return followTranscript(id, {
     file,
-    paused: () => Boolean(runners.get(id)?.alive || oneshots.has(id)),
+    // Calado só enquanto o NOSSO processo trabalha — aí ele já publica cada linha no canal
+    // e seguir o arquivo duplicaria tudo. A pergunta era `alive`, e isso furava: um runner
+    // OCIOSO (sobrevive minutos depois da última resposta) calava o seguidor enquanto a
+    // conversa seguia sendo conduzida no TERMINAL. As linhas do terminal eram puladas para
+    // sempre — quatro agentes ficaram com relógio correndo na tela com o terminal já os
+    // mostrando terminados. Ocioso não publica nada, então ocioso não cala ninguém.
+    paused: () => isRunning(id),
   });
 }
 

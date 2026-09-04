@@ -16,9 +16,10 @@ serviço, rota nem painel: recebe dados e callbacks, devolve nó.
 public/js/components/
   feed.js         lista paginada que cresce para cima (histórico, logs)
   bubble.js       bolha de mensagem estática e bolha de streaming (SÓ texto)
+  markdown-text.js  o markdown da resposta do Claude virando nós (o corpo da bolha)
   message-items.js  quebra uma mensagem lida do disco nos blocos dela, na ordem
-  agent-card.js   um agente como bloco próprio (relógio vivo + relatório)
   agent-strip.js  os agentes em segundo plano da conversa (faixa do rodapé + registro)
+  agent-steps.js  os passos de um agente (o que ele fez), dentro da linha da faixa
   composer.js     caixa de escrever com campos de opção e enviar/parar
   chat.js         feed + composer + envio = vista de conversa
   live-answer.js  uma resposta chegando: bolha viva + tradutor, já dentro do feed
@@ -127,10 +128,71 @@ Quem consome um stream nunca toca no DOM: só chama esses métodos. `startedAt` 
 relógio contar do começo do TURNO, e não do nascimento desta bolha — é o que permite
 trocar a bolha viva quando um bloco novo entra sem o tempo voltar a zero.
 
+### O corpo da bolha: markdown para o Claude, texto cru para você
+
+O Claude **responde em markdown**. A bolha mostrava a resposta crua, e o que se lia era
+`**Criados — o mecanismo**`, ``` solto e `|---|` no meio da conversa. Hoje as duas bolhas
+pedem o corpo à mesma função interna (`bodyOf`), e a decisão é **de quem escreveu** — não
+do formato do texto (adivinhar "isto parece markdown" erraria com quem digita `#` ou `|`):
+
+| Mensagem | corpo | por quê |
+| --- | --- | --- |
+| `role: 'assistant'` | [`markdown-text`](#markdown-textjs) | é markdown de verdade; formatar é trabalho da tela, não de quem lê |
+| `role: 'user'` ou `'system'` | `<pre>` com o texto | **o que você digitou aparece como digitado**: se você mandou `**` literal ou uma linha começando com `-`, reformatar mudaria a sua mensagem na tela |
+| `fromCli: true` (qualquer papel) | [`markdown-text`](#markdown-textjs) | a saída de `/context` e `/cost` é gravada como turno do **usuário**, mas quem escreveu foi o CLI — e em markdown. Quem prova isso é o serviço (`isMeta` do transcript, ver [03 · API](03-api.md#conversas)), não um palpite pelo formato do texto |
+
+A bolha viva repassa cada `append` para o corpo (`setText`), e o `finish()` chama
+`flush()` — terminar com o último pedaço ainda não desenhado seria o bug da "resposta
+apagada" por outro caminho.
+
+## `markdown-text.js`
+
+Markdown → nós na tela. É o corpo de uma resposta do Claude.
+
+```js
+const corpo = createMarkdownText({ text: msg.text });
+bolha.append(corpo.node);
+corpo.setText(buffer);   // stream: redesenha no PRÓXIMO QUADRO (coalescido)
+corpo.flush();           // fim do turno: desenha agora
+corpo.destroy();         // cancela o quadro pendente
+```
+
+- a **gramática** não mora aqui: está em `public/js/core/markdown.js` (+
+  `markdown-inline.js`), que é regra **pura** e tem teste na suíte
+  ([13 · Testes](13-testes.md#o-que-está-coberto)). Este arquivo só desenha;
+- **nada de `innerHTML`.** O texto vem de fora (o Claude escreve, e o que ele leu pode ter
+  vindo de qualquer arquivo): montamos elemento por elemento, então uma `<img onerror>` no
+  meio da resposta é **texto**, não execução;
+- link só é link com `http(s)`/`mailto`. `javascript:` vira texto riscado
+  (`.md-link.off`), porque clicar nele seria executar o que a resposta pediu;
+- `setText` **espera o próximo quadro** de propósito: uma resposta chega em centenas de
+  `text_delta`, e redesenhar em cada um é trabalho jogado fora (o navegador pinta uma vez
+  por quadro de todo jeito). Medido no arnês: 2 deltas → 1 quadro agendado;
+- `destroy()` é obrigatório porque existe quadro agendado — a bolha pode sair da tela com
+  um pendente (drawer fechado no meio da resposta).
+
+**Zero biblioteca.** Nem `marked` nem `markdown-it`: o projeto não tem dependência e não
+tem build, e o caminho comum dessas libs (`parse()` → `innerHTML`) pediria um sanitizador
+atrás. O subconjunto coberto é o que o Claude escreve de fato — título, parágrafo, cerca de
+código (com a linguagem), lista aninhada, citação, régua, tabela, e, na linha, negrito,
+itálico, `código`, riscado e link. HTML embutido, nota de rodapé e link de referência ficam
+como texto: é honesto e mantém o parser pequeno.
+
+Duas armadilhas que o teste trava, porque as duas apareceriam todo dia neste projeto:
+
+- **`_` dentro de palavra não é itálico.** `built_in_copy_spec.rb` e
+  `eco_confirm_outcome.rb` perderiam os underscores e ganhariam itálico no meio;
+- **`|` não faz tabela.** `ps aux | grep node` é comando; o que define tabela é a linha
+  separadora (`|---|`) logo abaixo do cabeçalho.
+
+E uma decisão de streaming: **cerca de código aberta vale até o fim do texto**. Enquanto a
+resposta chega, o ``` de fechamento ainda não existe — tratar como parágrafo faria o bloco
+piscar entre dois desenhos a cada pedaço que chega.
+
 ## `message-items.js`
 
 Uma mensagem **lida do disco** → os blocos dela na tela, na ordem em que aconteceram.
-Compõe [`bubble`](#bubblejs), [`tool-call`](#tool-calljs) e [`agent-card`](#agent-cardjs).
+Compõe [`bubble`](#bubblejs) e [`tool-call`](#tool-calljs).
 
 ```js
 const feed = createFeed({
@@ -144,31 +206,44 @@ const feed = createFeed({
 - devolve **uma lista de nós** (o feed achata) — um por bloco (`text`, `tool`, `agent`);
 - só o **primeiro** bloco leva o cabeçalho "quem falou · quando": repetir em cada bloco
   encheria a tela de etiquetas iguais;
-- `keep` recebe o que tem **timer** (cartão de agente ainda rodando) junto com o bloco de
-  origem. Quem monta destrói ao recarregar o feed — nó removido da tela com relógio vivo é
-  vazamento — e coloca o agente na faixa do rodapé;
+- **bloco de agente devolve `null`**: agente não entra na conversa (ver
+  [10 · Chat](10-chat.md#agentes-em-segundo-plano)). Por isso não há mais o `keep` de antes,
+  que existia para o cartão de agente com relógio vivo;
 - mensagem sem `blocks` (formato antigo, ou outro caminho) continua desenhando como texto.
 
-## `agent-card.js`
+> **`agent-card.js` não existe mais.** Ele desenhava o agente como bloco da conversa, com
+> relógio e relatório. Foi removido em 31/08 pelo dono, olhando a tela: o mesmo agente
+> aparecia com relógio no feed **e** na faixa do rodapé. Hoje agente aparece só na faixa, e
+> quem interpreta o relatório na conversa é o Claude principal — o porquê está em
+> [10 · Chat](10-chat.md#agentes-em-segundo-plano). Se um dia o cartão voltar a fazer
+> sentido, ele volta como componente próprio; não reintroduza o desenho dentro do painel.
 
-Um **agente** como bloco próprio da conversa: nome, tipo, relógio vivo e o relatório
-quando ele volta.
+## `agent-steps.js`
+
+Os **passos** de um agente — o "o que ele está fazendo", dentro da linha da faixa. Duas
+peças: quem sabe **buscar e desenhar** os passos, e a **caixa** que abre e se enche. Separado
+assim porque a caixa é reaproveitável (foi usada no cartão da conversa enquanto ele existiu)
+e porque a lógica de "abre, busca uma vez, avisa se falhou" tem de ser escrita uma vez só:
 
 ```js
-const card = createAgentCard({ name: 'Lane 1', agentType: 'general-purpose', startedAt });
-feed.append(card.node);
-card.addChild(toolCall.node);                      // o que ele fez, quando se sabe
-card.finish({ summary: 'terminou', report: '…', durationMs: 726000, status: 'completed' });
-card.running;                                      // ainda de pé?
-card.destroy();                                    // tem timer: sempre
+const passos = createAgentSteps({ fetch: (ref) => api.conversations.agentSteps(id, ref) });
+
+createAgentStrip({ onExpand: passos });   // a faixa hospeda a caixa em cada linha
+
+const caixa = createStepsBox({ ref, onOpen: passos });   // a caixa em si
+caixa.node;                  // vai onde você quiser
+caixa.addChild(node);        // um passo (serve para o que chega ao vivo, pelo stream)
+await caixa.load();          // busca (uma vez); erro fica escrito no lugar dos passos
+caixa.vazia;                 // nada entrou ainda?
 ```
 
-Existe porque agente **não** é ferramenta comum: o `tool_result` dele volta em ~3 s com o
-aceite do disparo, e o trabalho chega minutos depois num aviso separado
-([10](10-chat.md#agentes-em-segundo-plano)). Desenhado como chip, ele aparecia
-**resolvido** enquanto seguia trabalhando por doze minutos — e escondido no pé de uma
-mensagem já terminada. Cria com `running: false` para um agente que já voltou (é o caso da
-leitura do disco); `startedAt` faz o relógio contar do disparo de verdade.
+Não desenha nada de novo: os passos vêm nos **mesmos blocos** de uma conversa, então quem
+os desenha é o [`message-items`](#message-itemsjs) — as mesmas bolhas e as mesmas chamadas
+de ferramenta. Se a resposta veio cortada pelo teto, ele diz isso no meio dos passos
+("mostrando os últimos N de M"): mostrar 400 de 900 calado deixaria você achar que o agente
+fez só aquilo.
+
+Recebe **como** buscar por parâmetro — não conhece `api.js`, rota nem painel.
 
 ## `agent-strip.js`
 
@@ -176,7 +251,8 @@ Os agentes em segundo plano **da conversa**: a faixa de "rodando agora" (acima d
 escrever, como o painel fixo do terminal) **e** o registro de qual cartão é de quem.
 
 ```js
-const agentes = createAgentStrip({ onPick: () => feed.scrollToEnd() });
+// clicar numa linha: a faixa ABRE o cartão do agente e passa o nó, para quem monta rolar
+const agentes = createAgentStrip({ onPick: (id, node) => node?.scrollIntoView(...) });
 agentes.track({ id, name, agentType, card, startedAt });   // entrou
 agentes.track({ id, card });        // o cartão dele foi desenhado depois: liga os dois
 agentes.alias(agentId, id);         // id ESTÁVEL do agente -> o disparo dele
@@ -196,6 +272,18 @@ conhece aquele id, e aí quem chamou decide o que fazer com o relatório (nunca 
 `alias` existe porque o aviso de fim casa pelo **id estável** do agente, e num agente
 RETOMADO ele vem com o id da chamada que o retomou — sem o laço, o relatório não acha o
 cartão ([10](10-chat.md#agentes-em-segundo-plano)).
+
+**Clicar numa linha abre ALI MESMO o que aquele agente está fazendo** — o rodapé é onde
+você está olhando. A caixa é a mesma peça do cartão
+([`agent-steps`](#agent-stepsjs)); a faixa só a hospeda, com teto de altura e rolagem
+própria (um agente com 40 passos não pode empurrar a caixa de escrever para fora da tela).
+
+Duas versões erradas antes disso, e as duas por não olhar a tela do dono:
+
+1. `onPick: () => feed.scrollToEnd()` — rolava o feed até o **fim**, onde o cartão do agente
+   quase nunca está. Parecia que o clique não fazia nada;
+2. rolar até o cartão **na conversa** e abri-lo lá — funcionava, mas tirava a pessoa de onde
+   ela estava. "O conteúdo devia aparecer **aqui**", com a seta apontando para a faixa.
 
 Entrada **sem cartão** é normal: ao abrir a conversa, a faixa é preenchida pelo resumo da
 leitura (`page.agents`) e o bloco do disparo pode estar 200 mensagens atrás. Quando ele
@@ -486,7 +574,15 @@ conversas, o próprio CLI; ver [10](10-chat.md)).
   apaga tudo. Com outra resposta em voo isso apagaria a bolha dela; depois de um erro,
   apagaria a explicação do erro e sobraria uma janela vazia. Quem decide é a regra pura
   `core/response-end.js`, com spec na suíte — e a bolha informa se falhou pelo
-  `bubble.failed`.
+  `bubble.failed`;
+- **`reload()` espera o disco ter o turno.** O CLI grava o `.jsonl` **depois** de fechar o
+  stream (medido nesta máquina: no instante do `result` o arquivo só tinha a mensagem do
+  usuário; a resposta apareceu ~160-500 ms depois). Recarregar nessa janela trocava a bolha
+  que **tinha** a resposta por uma página que ainda não a tinha: a resposta desaparecia da
+  tela, sobrava a resposta anterior acima da mensagem recém-enviada, e reabrir a conversa
+  "consertava". Agora o `reload()` consulta a última mensagem do disco até ela ser uma
+  resposta posterior ao envio (`waitTurnOnDisk`, teto de ~1,8 s); se estourar o teto ele
+  **não recarrega** — manter o que a pessoa viu chegar é mais honesto que trocá-lo por nada.
 
 Antes a fila era **aqui**: a segunda mensagem ficava presa no navegador e só saía
 quando a primeira acabava. Era o oposto do terminal, onde a mensagem chega em quem
@@ -735,14 +831,15 @@ da bolha: ele é um bloco da conversa (`.feed-block`), como no terminal.
   `{ kind: 'tool', id, name, input, result }` da API e monta o chip já resolvido. Aqui
   **não** há `destroy()` — o listener do `tool-call` está no próprio nó dele, então morre
   quando o feed remove o bloco. Só o que escuta `document`/`window` ou usa timer precisa
-  de destruição explícita (é o caso do [`agent-card`](#agent-cardjs), que tem relógio).
+  de destruição explícita (é o caso do [`activity`](#activityjs), que tem relógio).
 
 Três decisões de honestidade (regra 8 do projeto):
 
 - enquanto não há retorno, o resultado diz **"executando…"** — não "vazio";
 - ao fim do stream, o que não voltou vira **"sem resultado registrado neste stream"** —
-  e o agente de segundo plano nem passa por aqui: ele tem cartão próprio, porque o retorno
-  da ferramenta dele é só o recibo de início ([`agent-card`](#agent-cardjs));
+  e o agente de segundo plano nem passa por aqui: ele vive na
+  [faixa do rodapé](#agent-stripjs), porque o retorno da ferramenta dele é só o recibo de
+  início — e o trabalho real fica no transcrito dele;
 - texto cortado no teto ganha a marca *"… cortado no limite de exibição"*, em vez de
   fingir que aquilo era o conteúdo inteiro.
 

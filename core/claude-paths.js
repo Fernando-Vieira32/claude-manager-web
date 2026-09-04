@@ -18,6 +18,33 @@ export function resolveConversationId(id) {
   return { projectDir, sessionId, file };
 }
 
+/** id de agente, como o CLI o escreve: letra + hex curto (`ad5b3d00de6075401`). */
+const AGENT_ID_RE = /^[A-Za-z0-9_-]{4,64}$/;
+
+/**
+ * Onde mora o trabalho de um SUBAGENTE.
+ *
+ * O arquivo da conversa **não** tem os passos dele — medido: zero entradas de sidechain em
+ * 923 transcritos. O CLI grava o subagente num arquivo próprio, ao lado da conversa:
+ *
+ *     ~/.claude/projects/<projeto>/<sessão>/subagents/agent-<agentId>.jsonl
+ *     ~/.claude/projects/<projeto>/<sessão>/subagents/agent-<agentId>.meta.json
+ *
+ * No mesmo formato das conversas (`isSidechain: true`, o mesmo envelope `message.content`),
+ * então quem lê conversa lê isto. O `<output-file>` em `/tmp` que aparece no aviso de fim é
+ * só um **atalho** para esse arquivo — apontar para lá seria acoplar a um caminho volátil.
+ */
+export function subagentFiles(id, agentId) {
+  const { projectDir, sessionId } = resolveConversationId(id);
+  if (!AGENT_ID_RE.test(agentId || '')) throw badRequest('id de agente inválido');
+  const dir = path.resolve(config.projectsDir, projectDir, sessionId, 'subagents');
+  if (!dir.startsWith(config.projectsDir + path.sep)) throw badRequest('caminho fora de projects/');
+  return {
+    file: path.join(dir, `agent-${agentId}.jsonl`),
+    meta: path.join(dir, `agent-${agentId}.meta.json`),
+  };
+}
+
 /** Diretório em que a conversa aconteceu (o `cwd` gravado no transcript). */
 export async function cwdOfConversation(file) {
   let raw = '';

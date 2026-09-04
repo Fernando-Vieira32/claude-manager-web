@@ -8,8 +8,8 @@ import assert from 'node:assert/strict';
 import { createRunnerRegistry } from '../services/chat/runners.js';
 
 const ID = 'projeto:11111111-2222-3333-4444-555555555555';
-const runner = ({ signature = 'none|', alive = true, busy = false } = {}) => ({
-  conversationId: ID, signature, alive, busy, pid: 42, pending: busy ? 1 : 0,
+const runner = ({ signature = 'none|', alive = true, busy = false, working = busy } = {}) => ({
+  conversationId: ID, signature, alive, busy, working, pid: 42, pending: busy ? 1 : 0,
 });
 
 describe('createRunnerRegistry', () => {
@@ -77,6 +77,28 @@ describe('createRunnerRegistry', () => {
       reg.remember(ID, velho).remember(ID, novo);
       reg.forget(ID, velho);           // o `onExit` do velho chega atrasado
       assert.equal(reg.get(ID), novo);
+    });
+  });
+
+  // O bug que isto tranca: `paused` do seguidor do .jsonl perguntava `alive`. Um runner
+  // OCIOSO (ele sobrevive minutos depois da última resposta) calava o seguidor enquanto a
+  // conversa seguia sendo conduzida NO TERMINAL — e as linhas do terminal eram puladas para
+  // sempre. Na tela, quatro agentes com relógio correndo; no terminal, já terminados.
+  describe('está trabalhando agora?', () => {
+    it('processo vivo mas OCIOSO não está trabalhando (então não cala o seguidor)', () => {
+      const reg = createRunnerRegistry();
+      reg.remember(ID, runner({ alive: true, working: false }));
+      assert.equal(reg.working(ID), false);
+    });
+
+    it('processo trabalhando está trabalhando', () => {
+      const reg = createRunnerRegistry();
+      reg.remember(ID, runner({ working: true }));
+      assert.equal(reg.working(ID), true);
+    });
+
+    it('conversa sem processo nenhum', () => {
+      assert.equal(createRunnerRegistry().working(ID), false);
     });
   });
 

@@ -17,11 +17,14 @@ import { messageItems } from './message-items.js';
 import { createLiveAnswer } from './live-answer.js';
 import { createQuickReplyHost } from './quick-reply-host.js';
 import { createAgentStrip } from './agent-strip.js';
-import { afterResponse } from '../core/response-end.js';
+import { createAgentSteps } from './agent-steps.js';
+import { afterResponse, waitTurnOnDisk } from '../core/response-end.js';
 
 /**
  * @param {object} opts
  * @param {(args:{limit:number,before?:number}) => Promise<object>} opts.fetchPage
+ * @param {(agentId:string) => Promise<object>} [opts.fetchAgentSteps] os passos de um
+ *   subagente, buscados quando o cartão dele é aberto (sem isto o cartão não oferece)
  * @param {(text:string, values:object, images:Array, onEvent:Function, signal:AbortSignal) => Promise<void>} opts.send
  * @param {() => Promise<any>} [opts.onStop] cancelamento do lado do servidor
  * @param {Array} [opts.fields] campos do composer (ver composer.js)
@@ -37,6 +40,7 @@ import { afterResponse } from '../core/response-end.js';
  */
 export function createChat({
   fetchPage,
+  fetchAgentSteps,
   send,
   onStop,
   fields = [],
@@ -49,27 +53,19 @@ export function createChat({
   allowImages = true,
   pageSize = 20,
 } = {}) {
-  // Blocos lidos do disco que têm relógio vivo (cartão de agente ainda rodando). Quem
-  // criou destrói: recarregar o feed troca os nós, e timer de nó removido é vazamento.
-  let doDisco = [];
-  const soltarDoDisco = () => {
-    agentes.clear();                                        // a faixa é redesenhada com o feed
-    for (const item of doDisco.splice(0)) item.destroy?.();
-  };
+  // Instante do último envio cujo turno pode ainda não estar gravado no .jsonl. Enquanto
+  // for > 0, recarregar o feed é perigoso: ver `waitTurnOnDisk` em core/response-end.js.
+  let envioPendente = 0;
+  // a faixa é redesenhada junto com o feed: quem está de pé vem na página (`onPage`)
+  const soltarDoDisco = () => agentes.clear();
+
+  // o que o cartão de um agente chama ao ser aberto: buscar os passos dele e desenhá-los
+  // ali dentro. Sem `fetchAgentSteps` o cartão simplesmente não oferece isso.
+  const passosDoAgente = fetchAgentSteps ? createAgentSteps({ fetch: fetchAgentSteps }) : undefined;
 
   const feed = createFeed({
     fetchPage,
-    renderItem: (item) => renderMessage(item, {
-      // cartão de agente lido do disco: o relógio é nosso para parar, e se ele ainda
-      // está rodando entra na faixa do rodapé como qualquer outro
-      keep: (card, block) => {
-        doDisco.push(card);
-        if (card.running) {
-          agentes.track({ id: block.id, name: block.name, agentType: block.agentType, card, startedAt: block.startedAt });
-        }
-      },
-      onToggle: () => feed.scrollToEnd(),
-    }),
+    renderItem: (item) => renderMessage(item, { onToggle: () => feed.scrollToEnd() }),
     // a faixa mostra quem o ARQUIVO diz estar de pé, mesmo que o disparo esteja 200
     // mensagens atrás — "quem está rodando" não pode depender de até onde você rolou
     onPage: (page) => { for (const a of page.agents || []) agentes.track(a); },
@@ -86,7 +82,9 @@ export function createChat({
   const autos = new Set();  // { resposta }
   // Faixa dos agentes em segundo plano: fica no rodapé, acima da caixa, como no terminal —
   // um agente que roda dez minutos não pode exigir rolar o feed para saber se está de pé.
-  const agentes = createAgentStrip({ onPick: () => feed.scrollToEnd() });
+  // clicar numa linha abre, ALI MESMO, o que aquele agente está fazendo — sem sair de onde
+  // você está. A primeira versão rolava a conversa até o cartão dele, e não era isso.
+  const agentes = createAgentStrip({ onExpand: passosDoAgente });
   // resposta de FUNDO: hospeda blocos de agente que não pertencem a turno nenhum
   let fundo = null;
   // botões de resposta rápida: peça própria (detecta as opções e se limpa sozinha)
@@ -139,11 +137,14 @@ export function createChat({
     composer.setHint('enviando…');
 
     const urls = images.map((im) => `data:${im.media_type};base64,${im.data}`);
+    envioPendente = Date.now();   // daqui até o disco ter o turno, não se recarrega o feed
     feed.append(messageBubble({ role: 'user', text, at: new Date().toISOString(), images: urls }));
 
     // bolha viva + tradutor do stream vêm juntos no `live-answer` (a mesma peça que
     // mostra a resposta que o Claude começa por conta própria)
-    const resposta = createLiveAnswer({ feed, agents: agentes, onHint: (t) => composer.setHint(t) });
+    const resposta = createLiveAnswer({
+      feed, agents: agentes, onAgentOpen: passosDoAgente, onHint: (t) => composer.setHint(t),
+    });
     const voo = { controller: new AbortController(), resposta };
     emVoo.add(voo);
 
@@ -179,8 +180,29 @@ export function createChat({
     composer,
 
     attach(scroller) { feed.attach(scroller); return this; },
-    start() { soltarDoDisco(); return feed.loadFirst(); },
-    reload() { soltarDoDisco(); return feed.loadFirst(); },
+    start() { envioPendente = 0; soltarDoDisco(); return feed.loadFirst(); },
+
+    /**
+     * Troca o que está na tela pelas mensagens do disco. **Espera o disco ter o último
+     * turno**: o CLI grava o `.jsonl` depois de fechar o stream, e recarregar antes disso
+     * apagava a resposta que você acabou de ver chegar (ver `core/response-end.js`).
+     * Se o turno não aparecer no tempo, não recarrega — a tela fica com o que já tem.
+     */
+    async reload() {
+      const pronto = await waitTurnOnDisk({
+        sentAt: envioPendente,
+        fetchLast: async () => {
+          const page = await fetchPage({ limit: 1 }).catch(() => null);
+          const itens = page?.messages || page?.items || [];
+          return itens[itens.length - 1];
+        },
+        sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
+      });
+      if (!pronto) return undefined;
+      envioPendente = 0;
+      soltarDoDisco();
+      return feed.loadFirst();
+    },
 
     /**
      * Envia um texto por código, com os valores atuais dos campos — o mesmo
@@ -220,7 +242,7 @@ export function createChat({
      * de agente deixaria a caixa em estado de resposta para sempre.
      */
     agentEvent(event) {
-      fundo = fundo || createLiveAnswer({ feed, agents: agentes });
+      fundo = fundo || createLiveAnswer({ feed, agents: agentes, onAgentOpen: passosDoAgente });
       fundo.onEvent(event);
       return this;
     },
@@ -236,7 +258,7 @@ export function createChat({
      * cima dela.
      */
     watch({ label = 'retomou sozinho…' } = {}) {
-      const resposta = createLiveAnswer({ feed, label, agents: agentes });
+      const resposta = createLiveAnswer({ feed, label, agents: agentes, onAgentOpen: passosDoAgente });
       const voo = { resposta };
       autos.add(voo);
       return {

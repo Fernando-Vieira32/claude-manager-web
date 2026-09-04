@@ -215,9 +215,19 @@ O que isso obriga a acertar, e por quê:
   Se essa marca fosse tirada no primeiro `tick`, tudo que o terminal escrevesse até lá
   seria engolido; e se fosse do começo, a janela mostraria a conversa duas vezes (ela já
   leu o histórico do disco ao abrir);
-- **pausa enquanto o processo é NOSSO.** Aí a resposta já sai pelo SSE do turno, e
-  publicar o arquivo também mostraria tudo em dobro. O cursor **anda mesmo pausado**:
-  sem isso, ao voltar, o histórico inteiro seria despejado de uma vez;
+- **pausa enquanto o nosso processo está TRABALHANDO** (`isRunning`, não `alive`). Aí a
+  resposta já sai pelo SSE do turno, e publicar o arquivo também mostraria tudo em dobro. O
+  cursor **anda mesmo pausado**: sem isso, ao voltar, o histórico inteiro seria despejado de
+  uma vez.
+
+  A pergunta era `alive`, e furava: o runner sobrevive **ocioso** por minutos depois da
+  última resposta (`CHAT_IDLE_MS`), e nesse período quem conduzia a conversa era o
+  **terminal**. As linhas do terminal caíam no cursor de um seguidor calado e eram puladas
+  para sempre. Medido numa conversa real: os avisos de fim de três agentes estavam no
+  arquivo (18:21:40, 18:24:09, 18:28:33, todos `completed`) e a faixa do rodapé seguia com
+  os quatro relógios correndo, enquanto o terminal já os mostrava terminados. Reabrir a
+  janela "consertava", porque aí a fonte é o disco. Ocioso não publica nada — então ocioso
+  não cala ninguém;
 - **lê só os bytes novos** (o transcript é append-only): seguir um arquivo de 2 MB custa
   um `stat` por segundo. Linha pela metade espera o `\n`; caractere partido entre duas
   leituras espera o resto (é `StringDecoder`, não `toString()` — senão a linha vira lixo e
@@ -470,6 +480,14 @@ Os eventos que **não** pertencem a um turno nosso (`hello`, `autoStart`, `autoE
 `busy`, `gone`, mais os normais do turno espontâneo) chegam pelo
 [canal da conversa](#o-canal-da-conversa), não por este stream.
 
+O `delta` e o `message` vêm **em markdown** — é como o Claude escreve. Nem o serviço nem o
+canal formatam nada: o texto atravessa cru, e quem traduz para a tela é o componente
+[`markdown-text`](11-componentes.md#markdown-textjs), no navegador. Foi decisão, não
+acidente: o texto chega em centenas de pedacinhos (o back nunca tem a mensagem inteira
+para formatar), e mandar HTML pronto pelo fio obrigaria o navegador a usar `innerHTML` em
+texto gerado por modelo. **Só a resposta do Claude é formatada** — o que você digitou
+aparece como digitado.
+
 ### Agentes em segundo plano
 
 Um agente **não** é uma ferramenta comum, e tratá-lo como tal produzia a tela errada. O
@@ -479,23 +497,31 @@ que o CLI grava, medido num transcript de verdade:
 | --- | --- | --- |
 | `tool_use` `Agent` (ou `Task`) com `description`/`subagent_type` | no disparo | o agente **nasceu** |
 | `tool_result` "Async agent launched successfully… agentId: a96a…" | ~3 s depois | só o **aceite** do disparo — não é o trabalho. Mas é aqui que vem o **id estável** do agente |
-| `<task-notification>` numa entrada `user`, com `<tool-use-id>`, `<status>`, `<summary>`, `<result>` | quando ele para (minutos depois) | o agente **terminou**, e aqui está o relatório |
-| `pendingBackgroundAgentCount` no `system/turn_duration` | a cada turno | quantos ainda estão de pé |
+| `<task-notification>` numa entrada `user`, com `<tool-use-id>`, `<status>`, `<summary>`, `<result>` | quando ele para (minutos depois) | o agente **parou**, e aqui está o relatório |
+| `pendingBackgroundAgentCount` no `system/turn_duration` | a cada turno, **só quando é maior que zero** | quantos ainda estão de pé; **ausente = nenhum** |
 
 Daí três eventos separados no contrato (`agentStart`, `toolResult { ack }`, `agentEnd`) e
 o desenho da tela:
 
-- **cada agente é um bloco próprio** da conversa ([`agent-card`](11-componentes.md#agent-cardjs)),
-  com relógio vivo, e não um chip no pé de uma mensagem. Ele trabalha por dez, doze
-  minutos: desenhado como ferramenta, aparecia **resolvido em 3 s** (pelo aceite) e
-  enterrado dentro de uma bolha já terminada;
+- **agente NÃO aparece na conversa.** Nem rodando, nem terminado, e nem as ferramentas que
+  ele roda por dentro. A conversa é o fio principal: quando o agente volta, quem interpreta
+  o relatório e fala com você é o Claude principal — e isso já chega como resposta dele.
+  ([`message-items`](11-componentes.md#message-itemsjs) devolve `null` para bloco de agente.)
+
+  Duas versões erradas antes, e a segunda foi o dono quem barrou olhando a tela: primeiro o
+  agente era um chip no pé da mensagem (aparecia **resolvido em 3 s**, pelo aceite do
+  disparo, enquanto seguia trabalhando doze minutos); depois virou um cartão próprio no
+  feed — e aí o **mesmo** agente aparecia com relógio em dois lugares, no feed e na faixa.
+  *"Só aqui precisa"*, com a seta apontando para a faixa. O cartão foi removido junto com o
+  componente `agent-card.js`;
 - **quem está de pé aparece no rodapé**, acima da caixa de escrever
-  ([`agent-strip`](11-componentes.md#agent-stripjs)) — é o painel fixo que o terminal tem.
-  Sem isso, saber se o agente ainda vive exigia rolar o feed para trás;
-- **o cartão é da CONVERSA, não do turno.** O disparo acontece num turno e o aviso de fim
-  chega em outro (ou em nenhum), então o registro `id → cartão` vive no nível da conversa.
-  Com um registro por resposta, o relatório caía numa resposta que nunca viu o disparo: o
-  cartão original ficava "rodando…" para sempre e o relatório aparecia duplicado;
+  ([`agent-strip`](11-componentes.md#agent-stripjs)) — é o painel fixo que o terminal tem, e
+  agora é o **único** lugar onde o agente aparece. Clicar na linha abre ali mesmo o que ele
+  está fazendo;
+- **o registro é da CONVERSA, não do turno.** O disparo acontece num turno e o aviso de fim
+  chega em outro (ou em nenhum), então o `id → agente` vive no nível da conversa. Com um
+  registro por resposta, o aviso caía numa resposta que nunca viu o disparo, e a linha ficava
+  na faixa com o relógio correndo para sempre;
 - **o aviso de fim não abre turno.** Ele chega sozinho; deixá-lo abrir uma bolha viva
   acenderia um indicador que nada iria apagar;
 - **o casamento é pelo id ESTÁVEL do agente** (`agentId` do aceite = `<task-id>` do aviso),
@@ -504,6 +530,68 @@ o desenho da tela:
   real. Casando só pelo disparo, aquele relatório não achava dono e o cartão ficava
   "rodando…" com doze minutos de trabalho perdidos. O id estável nunca vai para a tela: o
   próprio CLI pede para não mostrá-lo.
+
+### O que ele está fazendo: o transcrito do subagente
+
+O trabalho do agente **não está** no arquivo da conversa. Procurei: **zero** entradas de
+sidechain em 923 transcritos. O CLI grava cada subagente num arquivo próprio, ao lado:
+
+```
+~/.claude/projects/<projeto>/<sessão>/subagents/agent-<agentId>.jsonl     ← o que ele fez
+~/.claude/projects/<projeto>/<sessão>/subagents/agent-<agentId>.meta.json  ← tipo, modelo, description, toolUseId
+```
+
+No **mesmo formato** das conversas (`isSidechain: true`, o mesmo envelope
+`message.content`), então quem lê conversa lê isto e a tela desenha com os mesmos
+componentes. O `<output-file>` em `/tmp` que aparece no aviso de fim é só um **atalho** para
+esse arquivo — mirar nele seria acoplar a um caminho volátil (e, rodando em container, o
+`/tmp` é outro).
+
+Daí o desenho: **clicar no agente abre o cartão e busca os passos** dele
+([`agent-steps`](11-componentes.md#agent-stepsjs)), na primeira abertura e só nela —
+transcrito de agente passa de 800 KB. O pedido usa o id do **disparo**, porque o id estável
+do agente nunca vai para a tela; a tradução acontece no servidor pelo `toolUseId` do
+`.meta.json` (ver [03 · API](03-api.md#os-passos-de-um-subagente)).
+
+O `mtime` desse arquivo é, de quebra, o sinal honesto de "ele mexeu por último quando?" —
+devolvido como `lastActivityAt`.
+
+#### E é esse arquivo que mata o agente fantasma
+
+Quando o aviso de fim não chega ao arquivo **e** a conversa não tem o contador do CLI, nada
+fechava o agente: numa conversa real, **5 agentes de 19 dias** seguiam com relógio correndo
+na faixa do rodapé. Só que o transcrito dos cinco terminava com a resposta entregue.
+
+Então, para cada agente que sobra aberto, o servidor pergunta ao transcrito **dele**
+(`settleOpenAgents`), com regra estrutural e sem teto de tempo:
+
+| O que o transcrito dele mostra por último | Conclusão |
+| --- | --- |
+| ele **falou** (mensagem `assistant` cujo último bloco é texto) | **entregou** → encerra, e esse texto vira o relatório que o aviso nunca trouxe |
+| ele **pediu ferramenta** (`stop_reason: 'tool_use'`, ou último bloco é uma chamada) | estava no meio → **não decide nada** |
+| **não existe transcrito** dele | **não decide nada** — ler isso como "morreu" mataria o relógio de um agente vivo cujo arquivo ainda não apareceu |
+
+O `stop_reason` sozinho não servia: num transcrito real a última mensagem entregue vinha com
+o campo **ausente**. Por isso a decisão olha o que ele fez por último, com o `stop_reason` só
+como desempate a favor de "ainda trabalhando".
+
+**Aviso de fim significa que ele PAROU — qualquer que seja o status.** Está na própria nota
+do aviso: *"a task-notification fires each time this agent stops"*. Os status que aparecem
+de verdade nos transcritos desta máquina:
+
+| status | ocorrências | é fim? |
+| --- | --- | --- |
+| `completed` | 2443 | sim |
+| `failed` | 172 | sim |
+| `killed` | 168 | sim |
+| `stopped` | 20 | sim |
+
+O código tinha uma lista de status "terminais" (`completed`, `failed`) e tratava qualquer
+outro como **ainda de pé** — então 188 avisos de agente encerrado viravam relógio correndo,
+e um agente `killed` ficou 195 minutos na faixa do rodapé com o aviso de fim dele no
+arquivo. A regra virou o contrário: **parou, a menos que o aviso diga `running`**. Assim um
+status novo do CLI entra como fim, e não como mentira na tela. `killed`/`stopped` ganham
+chip de alerta — verde ali diria "deu certo".
 
 **Nem todo agente que termina tem aviso no arquivo.** Medido: o terminal deu uma frente
 como concluída (`Agent "Lane 2 colisão e tenant dos claims" finished · 15m 4s`) e **não
@@ -522,6 +610,21 @@ aviso do que o número diz, os **mais antigos** são encerrados como *"sem aviso
 (`status: 'unknown'`) até a conta fechar. O número é autoridade sobre a **quantidade**; a
 ordem "mais antigo primeiro" é a única defensável, porque um agente de uma sessão de ontem
 não sobrevive ao processo que o hospedava.
+
+**E o campo ausente conta como zero** — medido, não suposto. Num arquivo real de 110 fins
+de turno: os 4 que fecharam com agente vivo trouxeram o campo (`1`), nenhum turno com
+agente vivo veio sem ele, e depois que os agentes acabaram o CLI simplesmente **parou de
+escrever o campo** (mesma versão do CLI nos dois casos — ele omite quando é zero).
+
+Ler ausência como *"não sei"* era um bug com cara de fantasma: um agente disparado em 25/08
+seguia na faixa do rodapé com o relógio em **8678 min** seis dias depois, enquanto o
+terminal — o mesmo CLI, na mesma conversa, vivo — não mostrava agente nenhum. Quem
+percebeu foi o dono, justamente comparando as duas telas.
+
+**A trava contra a regressão oposta:** só concluímos zero por ausência se aquele arquivo já
+provou que o CLI que o escreveu usa o campo. Num `.jsonl` que nunca o traz, ausência volta a
+não decidir nada e quem está de pé continua de pé — apagar da tela um agente que está
+trabalhando seria a outra mentira.
 
 Duas tentativas erradas antes disso, e por que doeram:
 

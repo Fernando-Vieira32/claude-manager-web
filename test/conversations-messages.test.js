@@ -40,6 +40,36 @@ const ler = async (id) => (await repo.getConversation(id, { limit: 50 })).messag
 const blocos = (msgs, kind) => msgs.flatMap((m) => m.blocks).filter((b) => b.kind === kind);
 const textos = (msgs) => blocos(msgs, 'text').map((b) => b.text);
 
+// A saída de `/context` (e de `/cost`) é gravada como turno do USUÁRIO, mas quem a escreveu
+// foi o CLI — e em markdown. Medido em transcript de verdade: `isMeta: true`, sem `origin`.
+// A tela usa esse `fromCli` para formatar sem quebrar a promessa "o que você digitou aparece
+// como digitado" (ver 11-componentes.md#bubblejs).
+describe('mensagem que o CLI escreveu no turno do usuário', () => {
+  const doCli = (text) => ({ type: 'user', isMeta: true, message: { content: [{ type: 'text', text }] } });
+
+  it('vem marcada como `fromCli`', async () => {
+    const id = await givenTranscript(doCli('## Context Usage\n\n**Tokens:** 969.6k'));
+
+    assert.equal((await ler(id))[0].fromCli, true);
+  });
+
+  it('e o que você digitou NÃO vem marcado', async () => {
+    const id = await givenTranscript(fala('**isto** eu digitei'));
+
+    assert.equal((await ler(id))[0].fromCli, false);
+  });
+
+  it('a resposta do Claude também não é `fromCli` (ela já é formatada pelo papel)', async () => {
+    const id = await givenTranscript(
+      fala('oi'),
+      { type: 'assistant', message: { content: [{ type: 'text', text: 'olá' }] } },
+    );
+    const claude = (await ler(id)).find((m) => m.role === 'assistant');
+
+    assert.equal(claude.fromCli, false);
+  });
+});
+
 describe('ferramentas no histórico', () => {
   it('a mensagem carrega a ferramenta com pedido', async () => {
     const id = await givenTranscript(fala('rode ls'), usa('t1', 'Bash', { command: 'ls -la' }));
@@ -258,6 +288,45 @@ describe('agente no histórico', () => {
     assert.equal(agente.report, 'estourou');
   });
 
+  // Aviso de fim = ele PAROU. Havia uma lista de status "terminais" (`completed`,
+  // `failed`) e qualquer outro contava como de pé — mas nos transcritos desta máquina
+  // existem `killed` (168) e `stopped` (20). Um agente `killed` ficou com relógio correndo
+  // 195 minutos na tela, com o aviso de fim dele no arquivo.
+  for (const status of ['killed', 'stopped']) {
+    it(`aviso com status "${status}" encerra o agente (é fim de verdade)`, async () => {
+      const id = await givenTranscript(
+        fala('vai'),
+        dispara('t1', 'Lane 1'),
+        notifica('t1', { status, result: 'parei' }),
+      );
+
+      const [agente] = blocos(await ler(id), 'agent');
+
+      assert.equal(agente.running, false);
+      assert.equal(agente.status, status);
+    });
+  }
+
+  it('status que eu nunca vi antes também encerra — a regra é "parou, a menos que diga running"', async () => {
+    const id = await givenTranscript(
+      fala('vai'),
+      dispara('t1', 'Lane 1'),
+      notifica('t1', { status: 'cancelled_by_user', result: '' }),
+    );
+
+    assert.equal(blocos(await ler(id), 'agent')[0].running, false);
+  });
+
+  it('aviso dizendo `running` mantém o agente de pé (o CLI avisa e ele segue)', async () => {
+    const id = await givenTranscript(
+      fala('vai'),
+      dispara('t1', 'Lane 1'),
+      notifica('t1', { status: 'running', result: '' }),
+    );
+
+    assert.equal(blocos(await ler(id), 'agent')[0].running, true);
+  });
+
   it('sem aviso de fim, mas o CLI diz que ninguém está de pé: "não sei", não relógio correndo', async () => {
     // acontece de verdade: o aviso pode ter ficado fora do arquivo depois de um /compact
     const id = await givenTranscript(
@@ -324,11 +393,33 @@ describe('agente no histórico', () => {
     assert.equal(blocos(await ler(id), 'agent')[0].running, true);
   });
 
-  it('contador ausente (`null`) não decide nada', async () => {
+  // Medido num arquivo real de 110 fins de turno: todo turno que fechou com agente vivo
+  // trouxe o contador, e o CLI parou de escrevê-lo quando não havia mais nada de pé. Ler a
+  // ausência como "não sei" mantinha um agente de 25/08 com relógio correndo seis dias
+  // depois, enquanto o terminal não mostrava agente nenhum.
+  it('contador ausente depois de o arquivo já ter mostrado o campo = zero de pé', async () => {
     const id = await givenTranscript(
       fala('vai'),
       dispara('t1', 'Lane'),
-      { type: 'system', subtype: 'turn_duration', pendingBackgroundAgentCount: null },
+      { type: 'system', subtype: 'turn_duration', pendingBackgroundAgentCount: 1 },
+      fala('mais uma coisa'),
+      { type: 'system', subtype: 'turn_duration' },   // sem o campo: o CLI omite quando é 0
+    );
+    const agente = blocos(await ler(id), 'agent')[0];
+
+    assert.equal(agente.running, false);
+    assert.equal(agente.status, 'unknown');
+    assert.equal(agente.summary, 'sem aviso de fim');
+  });
+
+  // A trava contra a regressão oposta: sem prova de que aquele CLI escreve o campo, apagar
+  // o agente da tela seria a outra mentira — a de dizer que acabou quem está trabalhando.
+  it('arquivo que NUNCA mostrou o contador: ausência não decide nada', async () => {
+    const id = await givenTranscript(
+      fala('vai'),
+      dispara('t1', 'Lane'),
+      { type: 'system', subtype: 'turn_duration' },
+      { type: 'system', subtype: 'turn_duration', durationMs: 10 },
     );
 
     assert.equal(blocos(await ler(id), 'agent')[0].running, true);

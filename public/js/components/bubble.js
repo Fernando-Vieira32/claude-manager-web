@@ -3,8 +3,30 @@
 
 import { el, fmt } from '../core/ui.js';
 import { createActivity } from './activity.js';
+import { createMarkdownText } from './markdown-text.js';
 
 const WHO = { user: 'você', assistant: 'claude', system: 'sistema' };
+
+/**
+ * O corpo de uma bolha. **O Claude responde em markdown** — mostrar `**Criados**`, ``` e
+ * `|---|` na cara de quem lê é jogar para o leitor um trabalho que é da tela.
+ *
+ * Só o que o CLAUDE escreve é formatado. O que VOCÊ digitou aparece como digitado: se você
+ * mandou `**` literal ou uma linha começando com `-`, reformatar mudaria a sua mensagem na
+ * tela — e "o que eu mandei" é o único texto aqui que não pode ser reinterpretado.
+ *
+ * `fromCli` é a exceção medida: a saída de um comando local (`/context`, `/cost`) é gravada
+ * como turno do USUÁRIO, mas foi o CLI que a escreveu — e em markdown. Quem prova isso é o
+ * serviço (`isMeta` do transcript), não um palpite pelo formato do texto.
+ *
+ * @returns {{node:Node, setText:Function, flush:Function, destroy:Function}} sempre a mesma
+ *   forma, então quem usa a bolha não precisa saber qual dos dois caminhos caiu.
+ */
+function bodyOf(role, text = '', fromCli = false) {
+  if (role === 'assistant' || fromCli) return createMarkdownText({ text });
+  const node = el('pre', {}, text);
+  return { node, setText(v) { node.textContent = v; }, flush() {}, destroy() {} };
+}
 
 /**
  * Bolha estática de uma mensagem já conhecida — **só o texto** (e imagens).
@@ -14,10 +36,13 @@ const WHO = { user: 'você', assistant: 'claude', system: 'sistema' };
  * que embrulhava tudo numa caixa só, perdia a ordem em que as coisas aconteceram e
  * enterrava um agente de doze minutos dentro de uma mensagem já terminada.
  *
+ * Nó cru, sem `destroy`: o corpo desenha na hora e não deixa nada agendado. Quem cresce em
+ * tempo real é a `streamBubble`, e essa tem `destroy`.
+ *
  * @param {{role?:string, text?:string, at?:string, who?:string, badge?:string,
- *          images?:string[]}} msg
+ *          images?:string[], fromCli?:boolean}} msg
  */
-export function messageBubble({ role = 'assistant', text = '', at, who, badge, images } = {}) {
+export function messageBubble({ role = 'assistant', text = '', at, who, badge, images, fromCli } = {}) {
   return el('div', { class: `msg ${role}` },
     el('div', { class: 'who' },
       `${who || WHO[role] || role}${at ? ` · ${fmt.when(at)}` : ''}`,
@@ -25,7 +50,7 @@ export function messageBubble({ role = 'assistant', text = '', at, who, badge, i
     images && images.length
       ? el('div', { class: 'msg-imgs' }, ...images.map((src) => el('img', { class: 'msg-img', src, alt: 'imagem enviada' })))
       : null,
-    text ? el('pre', {}, text) : null);
+    text ? bodyOf(role, text, fromCli).node : null);
 }
 
 /**
@@ -38,14 +63,14 @@ export function messageBubble({ role = 'assistant', text = '', at, who, badge, i
  * modelo substituía o indicador e dava a impressão de que nada estava rodando.
  */
 export function streamBubble({ role = 'assistant', who, label = 'pensando…', startedAt = null } = {}) {
-  const pre = el('pre', {}, '');
+  const corpo = bodyOf(role);
   const activity = createActivity({ label, startedAt });
   const model = el('span', { class: 'chip accent', hidden: true });
   const summary = el('span', { class: 'chip ok', hidden: true });
   const extras = el('div', { class: 'bubble-extras' });   // só avisos (chips) agora
   const node = el('div', { class: `msg ${role} streaming` },
     el('div', { class: 'who' }, who || WHO[role] || role, activity.node, model, summary),
-    pre,
+    corpo.node,
     extras);
 
   activity.start();
@@ -65,13 +90,13 @@ export function streamBubble({ role = 'assistant', who, label = 'pensando…', s
 
     append(chunk) {
       buffer += chunk;
-      pre.textContent = buffer;
+      corpo.setText(buffer);
       return api;
     },
 
     setText(value) {
       buffer = value;
-      pre.textContent = buffer;
+      corpo.setText(buffer);
       return api;
     },
 
@@ -119,13 +144,17 @@ export function streamBubble({ role = 'assistant', who, label = 'pensando…', s
         summary.textContent = text;
         summary.hidden = false;
       }
-      if (!buffer.trim() && !extras.childNodes.length) pre.textContent = '(sem texto)';
+      if (!buffer.trim() && !extras.childNodes.length) corpo.setText('(sem texto)');
+      // desenha o que ainda estava agendado: terminar com o último pedaço faltando na tela
+      // seria o mesmo bug de "resposta apagada" por outro caminho
+      corpo.flush();
       return api;
     },
 
     /** Obrigatório: a bolha pode sumir com o stream ainda vivo (drawer fechado). */
     destroy() {
       activity.destroy();
+      corpo.destroy();
     },
 
     /** Tem algo escrito? Bolha viva que ficou vazia sai do feed em vez de virar "(sem texto)". */

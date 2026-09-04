@@ -77,6 +77,13 @@ export const api = {
     list: (q) => api.get('/api/conversations', { q }),
     read: (id, { limit = 20, before } = {}) =>
       api.get(`/api/conversations/${encodeURIComponent(id)}`, { limit, before }),
+
+    /**
+     * Os passos de um subagente — o que ele fez, em blocos. O trabalho dele não está no
+     * arquivo da conversa: mora num transcrito próprio (ver readme/10-chat.md).
+     */
+    agentSteps: (id, ref, { limit } = {}) =>
+      api.get(`/api/conversations/${encodeURIComponent(id)}/agents/${encodeURIComponent(ref)}`, { limit }),
     remove: (id) => api.del(`/api/conversations/${encodeURIComponent(id)}`),
     rename: (id, name) => api.post(`/api/conversations/${encodeURIComponent(id)}/rename`, { name }),
     trash: () => api.get('/api/conversations/trash'),
