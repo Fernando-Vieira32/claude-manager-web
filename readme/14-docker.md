@@ -62,7 +62,11 @@ teste automático antes de subir: igual ao fluxo nativo, você roda quando quer.
 | `HOST_HOME` | seu home; entra no container **no mesmo caminho** | `$HOME` |
 | `APP_UID` / `APP_GID` | rodar com o seu uid: arquivos editados saem seus e o `~/.claude` é legível | seu `id -u`/`id -g` |
 | `PORT` | porta em `127.0.0.1` | `7788` |
-| `CHAT_ALLOW_FULL_TOOLS` | `1` libera automático/aceitar-edições; `0` deixa o chat só-leitura | `1` |
+| `CHAT_ALLOW_FULL_TOOLS` | `1` libera automático/aceitar-edições/direto; `0` deixa o chat só-leitura | `1` |
+
+`GH_TOKEN` **não** entra no `.env` de propósito (é credencial): o `docker-app.sh` lê do seu
+chaveiro na hora de subir e passa pelo ambiente — ver
+[o caso do `gh`](#2-o-chaveiro-do-desktop-não-entra-o-caso-do-gh).
 
 ## Como o container é montado (e por quê)
 
@@ -90,7 +94,13 @@ Rodando os dois lado a lado, mesma máquina:
 | `npm test` | 172/172 | **172/172** |
 | Turno de chat de verdade | ok | **ok** (`ok:true`, 1,9 s) |
 
-### A única diferença que sobrou
+### As diferenças que sobraram
+
+Três, todas medidas. Nenhuma é regra nossa: o servidor não corta ferramenta nenhuma do
+Claude fora do modo "só conversa" (trancado por teste — ver
+[13 · Testes](13-testes.md)).
+
+#### 1. O `cwd` das sessões
 
 Na lista de Sessões, o **`cwd` de cada sessão vem vazio** no container — e é o `cwd` que
 liga a sessão ao projeto/conversa dela. A causa é o perfil AppArmor padrão do Docker, que
@@ -107,6 +117,37 @@ linha no `docker-compose.yml`:
 
 Em troca, o container perde o confinamento do AppArmor inteiro — não só essa leitura. Não
 vale a pena por uma coluna.
+
+#### 2. O chaveiro do desktop não entra (o caso do `gh`)
+
+`gh auth login` guarda o token no **chaveiro** da sua sessão gráfica, não em arquivo:
+`~/.config/gh/hosts.yml` fica sem `oauth_token`. O chaveiro só responde para quem está na
+sessão do desktop, e o container não está — resultado: dentro dele o `gh` diz *"the token
+in default is invalid"* e a API responde **401**. No chat isso parece "erro de permissão",
+mas é falta de credencial.
+
+Medido, para não tentar de novo: **montar o socket do D-Bus não resolve** (nem
+`-v /run/user/1000/bus`, nem a pasta inteira, nem com `/etc/machine-id`). O token continua
+inalcançável.
+
+A saída é passar o token pelo **ambiente**: o `docker-app.sh` lê `gh auth token` no *seu*
+ambiente (onde o chaveiro responde) e o `docker-compose.yml` repassa como `GH_TOKEN`. Se o
+`gh` não estiver instalado, fica vazio e nada muda. **Nada é escrito em disco** — não vai
+para o `.env` nem para o repo.
+
+O preço, dito claro: quem puder falar com o daemon do Docker lê esse token
+(`docker inspect` mostra o ambiente do container). Na prática é o mesmo alcance de quem já
+tem seu home montado ali dentro; se você não quer nem isso, suba com `GH_TOKEN=` vazio e o
+`gh` volta a ficar sem login lá dentro.
+
+#### 3. Não há sandbox de Bash dentro do container
+
+O `bwrap` (bubblewrap), que o Claude Code usa para rodar comando em sandbox, **não existe
+na imagem** — e instalar não basta: sob o AppArmor padrão do Docker ele falha com *"no
+permissions to create new namespace"* (medido). Sem sandbox, o modo **automático** tem de
+recorrer ao classificador para mais coisa do que no terminal, e uma negativa dele é final
+aqui (não há a quem perguntar). É por isso que existe o modo **direto** — ver
+[10 · Chat](10-chat.md#modos-de-permissão).
 
 ## Segurança, sem meias palavras
 

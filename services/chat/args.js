@@ -28,17 +28,27 @@ function requireFullTools() {
  * Modos de permissão oferecidos ao navegador — espelham os do terminal
  * (`claude --permission-mode`). Em headless não existe "perguntar antes": o modo
  * já libera ou não.
- *  none         — só conversa; não lê, não edita, não roda nada.
- *  plan         — modo plano: lê o projeto e propõe um plano, sem alterar nada.
- *  auto         — o Claude decide o que é seguro e edita/roda direto (gated).
- *  acceptEdits  — aplica edições e roda comandos sem perguntar (gated).
+ *  none               — só conversa; não lê, não edita, não roda nada.
+ *  plan               — modo plano: lê o projeto e propõe um plano, sem alterar nada.
+ *  auto               — o Claude decide o que é seguro e edita/roda direto (gated).
+ *  acceptEdits        — aplica edições e roda comandos sem perguntar (gated).
+ *  bypassPermissions  — nenhuma checagem: vai direto, como o terminal em modo
+ *                       perigoso (gated).
  * "gated" = só funciona com CHAT_ALLOW_FULL_TOOLS=1 no ambiente do servidor.
+ *
+ * Por que `bypassPermissions` existe aqui: em `auto` o CLI consulta um classificador
+ * e, quando ele barra, o terminal PERGUNTA e você libera. Headless não tem a quem
+ * perguntar — medido: em `--permission-mode manual` o CLI não pede nada pelo stream,
+ * ele emite `system/permission_denied` e devolve a negativa como resultado da
+ * ferramenta. Sem este modo, o navegador é mais restrito que o terminal por falta de
+ * gente, não por regra.
  */
 export const MODE_POLICIES = {
   none: () => ['--disallowedTools', ...WRITE_TOOLS, ...NET_TOOLS, ...READ_TOOLS],
   plan: () => ['--permission-mode', 'plan'],
   auto: () => { requireFullTools(); return ['--permission-mode', 'auto']; },
   acceptEdits: () => { requireFullTools(); return ['--permission-mode', 'acceptEdits']; },
+  bypassPermissions: () => { requireFullTools(); return ['--permission-mode', 'bypassPermissions']; },
 };
 
 export function modeArgs(mode) {

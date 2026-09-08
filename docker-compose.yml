@@ -32,6 +32,15 @@ services:
       # ligar o servidor precisa do caminho de verdade para o comando fazer sentido.
       HOST_PROJECT_DIR: "${PWD:-}"
 
+      # Token do GitHub para o `gh` funcionar lá dentro igual ao terminal. O
+      # `gh auth login` guarda o token no CHAVEIRO do seu desktop, e o chaveiro só
+      # responde para quem está na sessão gráfica — o container não alcança (testado:
+      # montar o socket do D-Bus NÃO resolve). Sem isto o `gh` responde 401 e parece
+      # "erro de permissão" no chat. Quem lê o chaveiro é o docker-app.sh, no seu
+      # ambiente; aqui só passa adiante. Vazio = nada é passado.
+      # Fica no AMBIENTE do container, nunca em arquivo: não entra no repo nem no .env.
+      GH_TOKEN: "${GH_TOKEN:-}"
+
     volumes:
       # MESMO caminho dentro e fora. Não troque por outro ponto de montagem: o transcrito
       # guarda o `cwd` absoluto e o nome da pasta em projects/ é derivado dele.

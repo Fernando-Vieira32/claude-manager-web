@@ -358,7 +358,8 @@ curl -s -X POST localhost:7788/api/conversations/trash/purge \
 | GET | `/api/chat/:id/events` | **canal da conversa** em SSE (turnos que o CLI começa sozinho) |
 | GET | `/api/chat/:id/status` | `{ running }` |
 
-`mode` é o modo de permissão (`none`/`plan`/`auto`/`acceptEdits`); `images` é opcional,
+`mode` é o modo de permissão (`none`/`plan`/`auto`/`acceptEdits`/`bypassPermissions`);
+`images` é opcional,
 uma lista `[{ media_type, data }]` (base64) anexada à mensagem. Detalhes, eventos do
 stream, modos, imagens e custo em [10 · Chat](10-chat.md).
 

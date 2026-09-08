@@ -361,9 +361,10 @@ mesmos modos do terminal (`claude --permission-mode`), com nomes claros:
 | **plano** | `--permission-mode plan` | lê o projeto e propõe um plano, sem alterar nada |
 | **automático** | `--permission-mode auto` | o Claude decide o que é seguro e edita/roda — o "auto mode" do terminal |
 | **aceitar edições** | `--permission-mode acceptEdits` | aplica edições e roda comandos sem perguntar |
+| **direto (sem barreira)** | `--permission-mode bypassPermissions` | nenhuma checagem: roda o que precisar, sem classificador — é o terminal em modo perigoso |
 
-**"automático" e "aceitar edições" vêm desligados.** A rota recusa com uma mensagem
-explicando, a menos que o servidor tenha sido iniciado com a variável ligada:
+**"automático", "aceitar edições" e "direto" vêm desligados.** A rota recusa com uma
+mensagem explicando, a menos que o servidor tenha sido iniciado com a variável ligada:
 
 ```bash
 # no .env (o docker-app.sh cria; 0 deixa o chat só-leitura)
@@ -375,6 +376,32 @@ libera ou não. Deixar um modo que edita/executa a um clique numa página web é
 acidente, então habilitá-lo é uma decisão consciente na hora de subir o servidor.
 ("plano" e "só conversa" não alteram nada, então não precisam da variável.)
 
+### Por que o navegador parecia mais restrito que o terminal
+
+Reclamação real: *"no terminal eu peço meus PRs e vem; no navegador começa a dar um monte
+de empecilho"*. Investigado, e **nada disso era bloqueio do servidor** — fora do "só
+conversa", nenhum modo passa `--disallowedTools`/`--allowedTools`/`--tools`, e há teste
+trancando isso ([13 · Testes](13-testes.md)). O que havia eram três coisas medidas:
+
+1. **`gh` sem token dentro do container** → HTTP 401, que na tela parece "sem permissão"
+   mas é credencial. O token do `gh` mora no chaveiro do desktop, fora do alcance do
+   container. Resolvido passando `GH_TOKEN` pelo ambiente — ver
+   [14 · Docker](14-docker.md#2-o-chaveiro-do-desktop-não-entra-o-caso-do-gh).
+2. **Ninguém para responder ao classificador.** Em `auto`, quando o classificador do CLI
+   barra um comando, o terminal **pergunta** e você libera. Aqui não há a quem perguntar —
+   e não é limitação nossa: medido em `--permission-mode manual`, o CLI **não pede nada
+   pelo stream**, ele emite `system/permission_denied` e devolve a negativa como
+   `tool_result`. Não existe, nesta versão do CLI, um caminho headless para "perguntar ao
+   usuário". Daí o modo **direto**: ele é a única forma de ter a mesma liberdade do
+   terminal sem um humano no meio.
+3. **Sem sandbox de Bash no container** (`bwrap` ausente e barrado pelo AppArmor), o modo
+   automático consulta o classificador para mais coisa do que no terminal — ver
+   [14 · Docker](14-docker.md#3-não-há-sandbox-de-bash-dentro-do-container).
+
+O que **é** igual nos dois lados, também medido: as regras de `~/.claude/settings.json`
+(`allow`/`deny`/`defaultMode`) e os **hooks** — o home é o mesmo, então valem dentro do
+container tal como no terminal.
+
 ## Variáveis de ambiente
 
 | Variável | Padrão | O quê |
@@ -384,7 +411,7 @@ acidente, então habilitá-lo é uma decisão consciente na hora de subir o serv
 | `CHAT_IDLE_MS` | `300000` (5 min) | quanto **silêncio** (sem linha nenhuma no stdout, sem fila e sem turno espontâneo) até o stdin ser fechado |
 | `CHAT_QUIET_MS` | `30000` (30 s) | janela em que a última linha do stdout ainda conta como "trabalhando" (`working`) |
 | `CHAT_FOLLOW_MS` | `1000` (1 s) | de quanto em quanto tempo o servidor olha o fim do `.jsonl` da conversa aberta, para mostrar o que o **terminal** está fazendo |
-| `CHAT_ALLOW_FULL_TOOLS` | (desligado) | `1` habilita os modos "automático" e "aceitar edições" |
+| `CHAT_ALLOW_FULL_TOOLS` | (desligado) | `1` habilita os modos "automático", "aceitar edições" e "direto" |
 | `MAX_BODY_BYTES` | `31457280` (30 MB) | limite do corpo da requisição (imagens base64 são grandes) |
 | `CLAUDE_BIN` | (auto) | caminho do binário `claude`. Por padrão é resolvido sozinho (PATH + locais conhecidos como `~/.npm-global/bin`); defina só se o servidor não achar o CLI |
 | `CHAT_ENTRYPOINT` | `claude-manager-web` | como a conversa fica marcada no transcript (`CLAUDE_CODE_ENTRYPOINT` do filho). Mexer aqui muda se ela aparece no `/resume` do terminal — ver abaixo |

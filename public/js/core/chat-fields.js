@@ -6,14 +6,19 @@
 
 /**
  * Modos de permissão — os mesmos do terminal. Em headless não há "perguntar
- * antes": o modo já libera ou não. Os que editam/executam (auto, aceitar edições)
- * só funcionam com CHAT_ALLOW_FULL_TOOLS=1 no servidor.
+ * antes": o modo já libera ou não. Os que editam/executam (auto, aceitar edições,
+ * direto) só funcionam com CHAT_ALLOW_FULL_TOOLS=1 no servidor.
+ *
+ * "direto" é o que dá paridade real com o terminal: em `auto`, quando o
+ * classificador barra, o terminal pergunta e você libera — aqui não há a quem
+ * perguntar, então a negativa seria final.
  */
 export const MODE_CHOICES = [
   { value: 'none', label: 'só conversa', title: 'não lê, não edita, não roda nada' },
   { value: 'plan', label: 'plano', title: 'lê o projeto e propõe um plano, sem alterar nada (como o modo plano do terminal)' },
   { value: 'auto', label: 'automático', title: 'o Claude decide o que é seguro e edita/roda direto — o "auto mode" do terminal (exige CHAT_ALLOW_FULL_TOOLS=1)' },
   { value: 'acceptEdits', label: 'aceitar edições', title: 'aplica edições e roda comandos sem perguntar (exige CHAT_ALLOW_FULL_TOOLS=1)' },
+  { value: 'bypassPermissions', label: 'direto (sem barreira)', title: 'nenhuma checagem de permissão: roda o que precisar, sem classificador e sem pedir — igual ao terminal em modo perigoso (exige CHAT_ALLOW_FULL_TOOLS=1)' },
 ];
 
 /**

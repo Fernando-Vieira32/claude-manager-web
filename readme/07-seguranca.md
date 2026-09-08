@@ -95,6 +95,21 @@ como palpite). Nada mais quebra — é o ponto da arquitetura de serviços.
 interpolar entrada do usuário. Se precisar rodar outro binário, siga o mesmo
 padrão — `exec` com string montada é injeção esperando acontecer.
 
+## Credencial no ambiente do container (`GH_TOKEN`)
+
+Para o `gh` funcionar lá dentro como funciona no terminal, o `docker-app.sh` lê
+`gh auth token` do **seu** chaveiro e passa o valor pelo ambiente do container. Duas coisas
+que precisam ficar ditas:
+
+- **não é gravado em disco** — não vai para o `.env`, não vai para o repo, não sobrevive ao
+  `parar`;
+- **quem fala com o daemon do Docker lê esse valor** (`docker inspect` mostra o ambiente).
+  É o mesmo alcance de quem já tem seu home montado ali; se não quiser, suba com
+  `GH_TOKEN=` vazio e o `gh` fica sem login dentro do container.
+
+O porquê e o que foi medido estão em
+[14 · Docker](14-docker.md#2-o-chaveiro-do-desktop-não-entra-o-caso-do-gh).
+
 ## Ao adicionar recursos que escrevem
 
 Quando você chegar ao editor (gravar arquivos), leve estas quatro:

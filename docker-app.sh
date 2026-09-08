@@ -43,6 +43,15 @@ set -a; . ./.env; set +a
 PORT="${PORT:-7788}"
 URL="http://127.0.0.1:$PORT"
 
+# O `gh` de dentro do container não alcança o chaveiro do desktop (é lá que o
+# `gh auth login` guarda o token), então ele responderia 401 — o que no chat parece
+# "sem permissão", mas é falta de credencial. Lemos aqui, no SEU ambiente, e passamos
+# pelo ambiente do container. Nada é escrito em disco: o .env continua sem credencial.
+if [ -z "${GH_TOKEN:-}" ] && command -v gh >/dev/null 2>&1; then
+  GH_TOKEN=$(gh auth token 2>/dev/null || true)
+  export GH_TOKEN
+fi
+
 rodando() { [ "$(docker inspect -f '{{.State.Running}}' claude-manager-web 2>/dev/null)" = true ]; }
 
 # Porta ocupada por outro programa daria um erro cru do daemon no meio do `up`.
