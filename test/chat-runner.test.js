@@ -32,6 +32,8 @@ function fakeProcess() {
     write: (line) => { proc.written.push(line); return true; },
     end: () => { proc.stdinEnded = true; },
   };
+  proc.killed = null;
+  proc.kill = (sinal) => { proc.killed = sinal; };
   proc.say = (obj) => proc.stdout.emit('data', `${typeof obj === 'string' ? obj : JSON.stringify(obj)}\n`);
   proc.die = (code = 1) => proc.emit('close', code, null);
   return proc;
@@ -65,7 +67,7 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 
 let proc, runner, exits, published;
 
-function given({ idleMs = 60_000, turnTimeoutMs = 60_000, quietMs = 60_000 } = {}) {
+function given({ idleMs = 60_000, turnTimeoutMs = 60_000, quietMs = 60_000, giveUpMs = 60_000 } = {}) {
   proc = fakeProcess();
   exits = 0;
   published = [];
@@ -80,6 +82,7 @@ function given({ idleMs = 60_000, turnTimeoutMs = 60_000, quietMs = 60_000 } = {
     idleMs,
     turnTimeoutMs,
     quietMs,
+    giveUpMs,
     publish: (event) => published.push(event),
     onExit: () => { exits += 1; },
   });
@@ -416,6 +419,56 @@ describe('ociosidade e tempo limite', () => {
     assert.equal(JSON.parse(proc.written[0]).request.subtype, 'interrupt');
     assert.equal(proc.stdinEnded, false);
     assert.equal(runner.alive, true);
+  });
+});
+
+// Visto na prática: CLI mudo às 08:54, nenhum `result` depois, e a conversa ficou presa —
+// todo envio caindo em 409 ou numa fila atrás de um turno morto. Interromper é PEDIR;
+// sem prazo, quem não responde bloqueia a conversa para sempre.
+describe('turno que não fecha nem depois do interrupt', () => {
+  it('passado o prazo, fecha o stdin — que é como um processo saudável sai', async () => {
+    given({ turnTimeoutMs: 10, giveUpMs: 40 });
+    send(fakeSse(), 'trava');
+
+    await wait(70);
+    assert.equal(proc.stdinEnded, true);
+    assert.equal(proc.killed, null, 'não mata antes de pedir para sair');
+  });
+
+  it('se nem fechar o stdin resolve, manda SIGTERM', async () => {
+    given({ turnTimeoutMs: 10, giveUpMs: 40 });
+    send(fakeSse(), 'trava');
+
+    await wait(130);
+    assert.equal(proc.killed, 'SIGTERM');
+  });
+
+  it('e ao sair, a fila é liberada: a conversa deixa de estar ocupada', async () => {
+    given({ turnTimeoutMs: 10, giveUpMs: 40 });
+    const sse = fakeSse();
+    const turno = send(sse, 'trava');
+
+    await wait(70);
+    proc.die(143);
+    await withTimeout(turno);
+    assert.equal(runner.busy, false);
+    assert.equal(runner.pending, 0);
+  });
+
+  // O outro lado da moeda: o interrupt FUNCIONOU e o CLI fechou o turno dentro do prazo.
+  // Aqui o relógio da desistência está armado — e desarmá-lo é o que separa "processo
+  // travado" de "processo saudável que foi interrompido".
+  it('CLI que atende ao interrupt no prazo continua vivo', async () => {
+    given({ turnTimeoutMs: 10, giveUpMs: 40 });
+    const turno = send(fakeSse(), 'demora mas obedece');
+
+    await wait(25);                 // tempo limite já estourou: prazo da desistência correndo
+    proc.say(resultLine({ subtype: 'interrupted' }));
+    await withTimeout(turno);
+
+    await wait(80);                 // passa da hora em que a desistência agiria
+    assert.equal(proc.stdinEnded, false);
+    assert.equal(proc.killed, null);
   });
 });
 

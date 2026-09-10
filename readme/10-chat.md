@@ -288,6 +288,53 @@ de fora de propósito: o modo é o que decide se o Claude pode editar o seu disc
 mudar isso no meio de uma fila de turnos é justamente onde um acidente passaria
 despercebido. Se um dia entrar, é aqui que se documenta.
 
+#### O 409 que aparecia sem você trocar nada
+
+Bug real: conversa iniciada no lançador, janela fechada e reaberta, e **toda** mensagem
+passava a dar o 409 acima — com o seletor mostrando "só conversa" sem você ter mexido nele.
+
+A causa não era a assinatura em si, era a **preferência não gravada**. O modo escolhido no
+lançador só existia na tela: o `onSaveSetting` da janela só grava quando o `id` já existe, e
+no lançador a conversa **ainda não nasceu** (o id chega no primeiro `init`). Resultado: as
+preferências da conversa ficavam sem `mode`, e ao reabrir a janela o seletor caía no padrão
+`settings.mode || 'none'`. O processo vivo, porém, tinha nascido com `--permission-mode auto`
+— assinatura diferente + runner respondendo = 409 em cada envio.
+
+Conserto: gravar modo e modelo **no instante em que a conversa passa a existir**, dentro do
+tratamento do `init` em `panels/new-conversation.js`, junto do `setId`. Quem escolhe no
+lançador não muda nada de comportamento; só passa a persistir.
+
+Fica valendo a lição: **preferência que a janela mostra tem de ser preferência gravada**.
+Passar valor só por parâmetro (`settings: escolhido`) funciona enquanto a janela vive e
+mente na próxima abertura.
+
+#### E o turno que nunca fecha (por que o 409 não passava nunca)
+
+Junto com o de cima apareceu um segundo problema, mais grave: o processo tinha um turno
+**aberto para sempre**. Medido no ar: última linha do CLI às 08:54:56, `result` nenhum
+depois, `pending: 1` e `busy: true` mais de 20 minutos, já passado o tempo limite de 15
+minutos do turno.
+
+A causa é que **interromper é um pedido**: o `onTurnTimeout` escreve a linha de `interrupt`
+no stdin e espera o CLI fechar o turno. Se o CLI travou, ninguém responde — e nenhum outro
+relógio é re-armado, porque o de ociosidade só conta silêncio "sem trabalho" e ali havia
+trabalho (um turno morto). Resultado: a conversa presa, com todo envio caindo em 409 ou
+numa fila atrás de um turno que nunca terminaria. Pela tela não havia saída: só matar o
+processo em **Sessões**.
+
+Agora o interrupt tem **cobrança** (`CHAT_GIVEUP_MS`, 30 s):
+
+| Momento | O que o servidor faz |
+| --- | --- |
+| turno passa de `CHAT_TIMEOUT_MS` | avisa e pede `interrupt` (como antes) |
+| passa `CHAT_GIVEUP_MS` e o turno não fechou | fecha o **stdin** — é assim que um processo saudável sai |
+| passa outro `CHAT_GIVEUP_MS` e ele ainda não saiu | `SIGTERM` |
+| processo sai | `onClose` libera a fila, publica `gone`, e o próximo envio sobe um processo novo |
+
+Se o CLI **atende** ao interrupt dentro do prazo, nada disso acontece: o `endTurn` desarma o
+relógio da desistência. Isso é spec, não intenção — mutei o `clearTimeout` e o teste
+acusou.
+
 ### Fechar a aba não mata nada (e agora nem podia)
 
 Um processo serve **vários turnos e vários clientes**, então o servidor não pode mais
@@ -408,6 +455,7 @@ container tal como no terminal.
 | --- | --- | --- |
 | `CHAT_MAX_USD` | (sem teto) | teto de gasto por mensagem (`--max-budget-usd`) — só se você definir. Numa assinatura não faz sentido; útil só com API paga por token |
 | `CHAT_TIMEOUT_MS` | `900000` (15 min) | tempo limite **por turno**: ao estourar, o turno é interrompido (o processo continua vivo). No `/compact`, que é execução única, ainda mata |
+| `CHAT_GIVEUP_MS` | `30000` (30 s) | prazo **depois** do interrupt. Interromper é um pedido; se o CLI não fechar o turno nesse prazo, o servidor desiste dele: fecha o stdin e, se nem isso resolver, manda `SIGTERM` |
 | `CHAT_IDLE_MS` | `300000` (5 min) | quanto **silêncio** (sem linha nenhuma no stdout, sem fila e sem turno espontâneo) até o stdin ser fechado |
 | `CHAT_QUIET_MS` | `30000` (30 s) | janela em que a última linha do stdout ainda conta como "trabalhando" (`working`) |
 | `CHAT_FOLLOW_MS` | `1000` (1 s) | de quanto em quanto tempo o servidor olha o fim do `.jsonl` da conversa aberta, para mostrar o que o **terminal** está fazendo |

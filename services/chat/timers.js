@@ -11,10 +11,12 @@
  * @param {() => boolean} p.hasWork há turno em curso ou na fila? (então não é ocioso)
  * @param {() => void} p.onIdle silêncio suficiente: hora de fechar o stdin
  * @param {() => void} p.onTurnTimeout o turno corrente passou do limite
+ * @param {() => void} p.onGiveUp o turno não fechou nem depois do interrupt
  */
-export function createTimers({ idleMs, turnTimeoutMs, hasWork, onIdle, onTurnTimeout }) {
+export function createTimers({ idleMs, turnTimeoutMs, giveUpMs, hasWork, onIdle, onTurnTimeout, onGiveUp }) {
   let idle = null;
   let turn = null;
+  let giveUp = null;
 
   const api = {
     /** Sinal de vida: adia a ociosidade por mais um período. */
@@ -35,8 +37,20 @@ export function createTimers({ idleMs, turnTimeoutMs, hasWork, onIdle, onTurnTim
       return api;
     },
 
-    endTurn() { clearTimeout(turn); return api; },
-    stop() { clearTimeout(idle); clearTimeout(turn); return api; },
+    /**
+     * O prazo que corre DEPOIS do interrupt. Existe porque interromper é um pedido: se o
+     * CLI travou, ele não fecha o turno, nenhum outro relógio é re-armado e a conversa
+     * fica presa para sempre atrás de um turno morto.
+     */
+    startGiveUp() {
+      clearTimeout(giveUp);
+      giveUp = setTimeout(onGiveUp, giveUpMs);
+      giveUp.unref?.();
+      return api;
+    },
+
+    endTurn() { clearTimeout(turn); clearTimeout(giveUp); return api; },
+    stop() { clearTimeout(idle); clearTimeout(turn); clearTimeout(giveUp); return api; },
   };
   return api;
 }

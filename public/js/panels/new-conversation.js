@@ -95,6 +95,12 @@ export default {
             if (ev.type === 'init' && ev.conversationId) {
               id = ev.conversationId;
               janela.setId(id);          // registra: reabrir pela lista foca esta janela
+              // A conversa só passa a existir AQUI, e é aqui que o modo/modelo escolhidos
+              // no lançador viram preferência dela. Sem isto, `onSaveSetting` não tinha id
+              // para gravar e reabrir a janela caía no padrão ("só conversa"): a mensagem
+              // seguinte ia com assinatura diferente da do processo vivo e batia em 409
+              // ("está respondendo com outro modo/modelo").
+              api.settings.save(id, { mode: values.mode, model: values.model }).catch(() => {});
             }
             onEvent(ev);
           }, signal);

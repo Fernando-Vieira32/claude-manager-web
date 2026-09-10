@@ -22,10 +22,11 @@ import { userLine, interruptLine } from './protocol.js';
 const TURN_TIMEOUT_MS = Number(process.env.CHAT_TIMEOUT_MS || 15 * 60 * 1000);
 const IDLE_MS = Number(process.env.CHAT_IDLE_MS || 5 * 60 * 1000);
 const QUIET_MS = Number(process.env.CHAT_QUIET_MS || 30 * 1000);
+const GIVE_UP_MS = Number(process.env.CHAT_GIVEUP_MS || 30 * 1000);
 
 export function createRunner({
   conversationId, sessionId, cwd, args, signature, mode, spawn,
-  idleMs = IDLE_MS, turnTimeoutMs = TURN_TIMEOUT_MS, quietMs = QUIET_MS,
+  idleMs = IDLE_MS, turnTimeoutMs = TURN_TIMEOUT_MS, quietMs = QUIET_MS, giveUpMs = GIVE_UP_MS,
   publish = (event) => publishToChannel(conversationId, event), onExit,
 }) {
   const queue = [];   // turnos NOSSOS em ordem de chegada; [0] é o mais antigo
@@ -37,6 +38,7 @@ export function createRunner({
   let sentSpawnError = false;
   let lastOutputAt = Date.now();
   let told = { busy: null, pending: null };
+  let desistindo = false;   // já pedimos ao processo que saia; o próximo passo é matar
 
   const isAuto = () => Boolean(current?.auto);
   const isBusy = () => queue.length > 0 || isAuto();
@@ -59,15 +61,31 @@ export function createRunner({
   const timers = createTimers({
     idleMs,
     turnTimeoutMs,
+    giveUpMs,
     hasWork: () => Boolean(queue.length || current),
     onIdle: () => child.stdin.end(),
     onTurnTimeout: () => {
-      const target = anySink();
-      if (!target) return;
-      target.send({ type: 'notice', message: 'tempo limite do turno excedido; interrompendo' });
+      anySink()?.send({ type: 'notice', message: 'tempo limite do turno excedido; interrompendo' });
       interrupt();
+      timers.startGiveUp();   // interromper é PEDIR; alguém tem de cobrar a resposta
     },
+    onGiveUp: () => giveUp(),
   });
+
+  /**
+   * O CLI não fechou o turno nem depois do interrupt. Aconteceu de verdade: última linha
+   * às 08:54, nenhum `result` depois, e a conversa ficou presa — cada envio caía em 409
+   * ("respondendo com outro modo") ou numa fila atrás de um turno morto, sem saída pela
+   * tela. Então paramos de esperar por ele: primeiro fechando o stdin, que é como um
+   * processo saudável sai; se nem isso, SIGTERM. Sair libera a fila no `onClose`.
+   */
+  function giveUp() {
+    if (!alive) return;
+    if (desistindo) { child.kill?.('SIGTERM'); return; }
+    desistindo = true;
+    child.stdin.end();
+    timers.startGiveUp();
+  }
 
   /** Chegou linha e ninguém é dono: ou é a vez do primeiro da fila, ou o turno nasceu sozinho. */
   function beginCurrent() {
@@ -85,6 +103,7 @@ export function createRunner({
   /** O `result` fecha o turno CORRENTE — e só ele: nada de encerrar quem nem começou. */
   function finishCurrent(line, parsed) {
     timers.endTurn();
+    desistindo = false;
     const ending = current;
     current = null;
     // turno cortado pelo "Parar": o CLI devolve `error_during_execution`, que para quem
